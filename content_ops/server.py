@@ -7,14 +7,27 @@ from .data_sources import DataSourceConfig, DataSourceService, parse_account_tar
 from .generator import generate_assets
 from .models import SourcePost
 from .settings import DEFAULT_PERSONA
+from .studio import StudioService
+
+
+# Maps backend asset keys to a stable platform slug used by drafts rows.
+PLATFORM_KEYS = ("xiaohongshu", "wechat_article", "video_account", "douyin_script")
 
 
 class DataSourceApi:
-    def __init__(self, service: DataSourceService):
+    def __init__(self, service: DataSourceService, studio: Optional[StudioService] = None):
         self.service = service
+        self._studio = studio
+
+    @property
+    def studio(self) -> StudioService:
+        if self._studio is None:
+            self._studio = StudioService()
+        return self._studio
 
     def handle(self, method: str, path: str, body: bytes = b"") -> Tuple[int, dict, str]:
         parsed = urlparse(path)
+        query = parse_qs(parsed.query)
         try:
             if method == "GET" and parsed.path == "/api/sources":
                 return _json_response(200, {"sources": [_public_source(source) for source in self.service.list_sources()]})
@@ -23,13 +36,11 @@ class DataSourceApi:
                 source = self.service.save_source(_source_from_request(payload))
                 return _json_response(201, {"source": _public_source(source)})
             if method == "GET" and parsed.path == "/api/source-runs":
-                query = parse_qs(parsed.query)
                 source_id = _first(query.get("source_id"))
                 limit = int(_first(query.get("limit")) or "10")
                 runs = [run.__dict__ for run in self.service.list_runs(source_id=source_id, limit=limit)]
                 return _json_response(200, {"runs": runs})
             if method == "GET" and parsed.path == "/api/source-posts":
-                query = parse_qs(parsed.query)
                 source_id = _first(query.get("source_id"))
                 run_id = _first(query.get("run_id"))
                 limit_raw = _first(query.get("limit"))
@@ -46,13 +57,82 @@ class DataSourceApi:
             if method == "POST" and parsed.path == "/api/generate":
                 payload = json.loads(body.decode("utf-8") or "{}")
                 return _json_response(200, {"drafts": self._generate_drafts(payload)})
+
+            studio_response = self._handle_studio(method, parsed.path, query, body)
+            if studio_response is not None:
+                return studio_response
+
             return _json_response(404, {"error": "not found"})
         except Exception as error:
             return _json_response(400, {"error": str(error)})
 
+    def _handle_studio(self, method, path, query, body):
+        payload = json.loads(body.decode("utf-8") or "{}") if body else {}
+
+        # Drafts: list / create / update-status / delete
+        if path == "/api/drafts" and method == "GET":
+            return _json_response(200, {"drafts": self.studio.list_drafts(
+                status=_first(query.get("status")),
+                platform=_first(query.get("platform")),
+                limit=int(_first(query.get("limit"))) if _first(query.get("limit")) else None,
+            )})
+        if path == "/api/drafts" and method == "POST":
+            return _json_response(201, {"draft": self.studio.save_draft(payload)})
+        if path == "/api/drafts" and method in ("PATCH", "PUT"):
+            draft_id = str(payload.get("id", ""))
+            status = str(payload.get("status", ""))
+            extra = {k: v for k, v in payload.items() if k not in ("id", "status")}
+            return _json_response(200, {"draft": self.studio.update_draft_status(draft_id, status, extra)})
+        if path == "/api/drafts" and method == "DELETE":
+            self.studio.delete_draft(str(_first(query.get("id")) or payload.get("id", "")))
+            return _json_response(200, {"ok": True})
+
+        # Accounts
+        if path == "/api/accounts" and method == "GET":
+            return _json_response(200, {"accounts": self.studio.list_accounts()})
+        if path == "/api/accounts" and method == "POST":
+            return _json_response(201, {"account": self.studio.save_account(payload)})
+        if path == "/api/accounts" and method == "DELETE":
+            self.studio.delete_account(str(_first(query.get("id")) or payload.get("id", "")))
+            return _json_response(200, {"ok": True})
+
+        # Assets
+        if path == "/api/assets" and method == "GET":
+            return _json_response(200, {"assets": self.studio.list_assets(group=_first(query.get("group")))})
+        if path == "/api/assets" and method == "POST":
+            return _json_response(201, {"asset": self.studio.save_asset(payload)})
+        if path == "/api/assets" and method == "DELETE":
+            self.studio.delete_asset(str(_first(query.get("id")) or payload.get("id", "")))
+            return _json_response(200, {"ok": True})
+
+        # Team
+        if path == "/api/team" and method == "GET":
+            return _json_response(200, {"members": self.studio.list_team()})
+        if path == "/api/team" and method == "POST":
+            return _json_response(201, {"member": self.studio.save_member(payload)})
+        if path == "/api/team" and method == "DELETE":
+            self.studio.delete_member(str(_first(query.get("id")) or payload.get("id", "")))
+            return _json_response(200, {"ok": True})
+
+        # Proxies
+        if path == "/api/proxies" and method == "GET":
+            return _json_response(200, {"proxies": self.studio.list_proxies()})
+        if path == "/api/proxies" and method == "POST":
+            return _json_response(201, {"proxy": self.studio.save_proxy(payload)})
+        if path == "/api/proxies" and method == "DELETE":
+            self.studio.delete_proxy(str(_first(query.get("id")) or payload.get("id", "")))
+            return _json_response(200, {"ok": True})
+
+        # Analytics
+        if path == "/api/analytics" and method == "GET":
+            return _json_response(200, self.studio.analytics_summary())
+
+        return None
+
     def _generate_drafts(self, payload: dict) -> list:
         persona = str(payload.get("persona") or DEFAULT_PERSONA)
         post_id = payload.get("post_id")
+        persist = bool(payload.get("persist", True))
         posts = self.service.list_posts(
             source_id=payload.get("source_id"),
             run_id=payload.get("run_id"),
@@ -70,7 +150,7 @@ class DataSourceApi:
                 metrics=record.get("metrics") or {},
             )
             assets = generate_assets(post, persona)
-            drafts.append({
+            entry = {
                 "post_id": post.id,
                 "account": post.account,
                 "source_url": post.url,
@@ -78,7 +158,25 @@ class DataSourceApi:
                     key: {"platform": a.platform, "title": a.title, "body": a.body}
                     for key, a in assets.items()
                 },
-            })
+            }
+            if persist:
+                saved = {}
+                for key, asset in assets.items():
+                    row = self.studio.save_draft({
+                        "id": f"draft-{post.id}-{key}",
+                        "post_id": post.id,
+                        "source_id": payload.get("source_id"),
+                        "platform": key,
+                        "title": asset.title,
+                        "body": asset.body,
+                        "tags": ["AI", "出海", "产品观察"],
+                        "status": "needs_review",
+                        "source_url": post.url,
+                        "ai_analysis": f"基于 @{post.account} 的海外信号，重构为可迁移的中文观点型内容。",
+                    })
+                    saved[key] = row.get("id")
+                entry["draft_ids"] = saved
+            drafts.append(entry)
         return drafts
 
 
@@ -94,6 +192,15 @@ def serve(service: DataSourceService, host: str = "127.0.0.1", port: int = 8787)
             self._handle()
 
         def do_POST(self):
+            self._handle()
+
+        def do_PUT(self):
+            self._handle()
+
+        def do_PATCH(self):
+            self._handle()
+
+        def do_DELETE(self):
             self._handle()
 
         def do_OPTIONS(self):
@@ -116,7 +223,7 @@ def serve(service: DataSourceService, host: str = "127.0.0.1", port: int = 8787)
 
         def _send_cors_headers(self):
             self.send_header("Access-Control-Allow-Origin", "*")
-            self.send_header("Access-Control-Allow-Methods", "GET,POST,OPTIONS")
+            self.send_header("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS")
             self.send_header("Access-Control-Allow-Headers", "Content-Type")
 
         def log_message(self, format, *args):

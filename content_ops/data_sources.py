@@ -178,6 +178,8 @@ class UrlLibSupabaseTransport:
         }
         if method == "POST":
             headers["Prefer"] = "resolution=merge-duplicates,return=representation"
+        elif method in ("PATCH", "DELETE"):
+            headers["Prefer"] = "return=representation"
         if payload is not None:
             body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         request = urllib.request.Request(url, data=body, headers=headers, method=method)

@@ -30,6 +30,15 @@ class ContentOpsHandler(BaseHTTPRequestHandler):
     def do_POST(self):
         self._handle()
 
+    def do_PUT(self):
+        self._handle()
+
+    def do_PATCH(self):
+        self._handle()
+
+    def do_DELETE(self):
+        self._handle()
+
     def do_OPTIONS(self):
         self.send_response(204)
         self._cors()
@@ -58,7 +67,7 @@ class ContentOpsHandler(BaseHTTPRequestHandler):
 
     def _cors(self):
         self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET,POST,OPTIONS")
+        self.send_header("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
 
     def log_message(self, *args):
