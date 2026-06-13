@@ -82,7 +82,7 @@ class ServerApiTest(unittest.TestCase):
             payload = json.loads(body)
 
             self.assertEqual(status, 400)
-            self.assertIn("credential file not found", payload["error"])
+            self.assertIn("AIRTAP_PERSONAL_ACCESS_TOKEN", payload["error"])
             self.assertEqual(repo.list_runs("x")[0].status, "failed")
 
 

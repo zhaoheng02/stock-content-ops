@@ -91,11 +91,9 @@ class DataSourceServiceTest(unittest.TestCase):
             self.assertEqual(payload["sources"][0]["credential_file"], "/Users/bytedance/personal.config")
             self.assertNotIn("secret-token", json.dumps(payload))
 
-    def test_run_x_source_reads_credential_file_live_and_records_run(self):
+    def test_run_x_source_via_records_collector_records_run(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
-            credential_path = root / "personal.config"
-            credential_path.write_text("X_BEARER_TOKEN=secret-token\n", encoding="utf-8")
             repo = JsonDataSourceRepository(root / "sources.json", root / "runs.json")
             service = DataSourceService(
                 repo,
@@ -108,20 +106,25 @@ class DataSourceServiceTest(unittest.TestCase):
                     platform="x",
                     cadence_minutes=30,
                     targets=("@builder_a",),
-                    credential_file=str(credential_path),
                 )
             )
-            transport = FakeTransport()
 
-            run = service.run_source("x", output_dir=root / "inbox", transport=transport)
+            def collector(source):
+                return [{
+                    "content_hash": "hash-1",
+                    "post_id": "tweet-1",
+                    "author_handle": "builder_a",
+                    "text": "AI pricing teardown with exact funnel metrics.",
+                    "url": "https://x.com/builder_a/status/tweet-1",
+                    "metrics": {"likes": 30},
+                }]
+
+            run = service.run_source("x", output_dir=root / "inbox", records_collector=collector)
 
             self.assertEqual(run.status, "success")
             self.assertEqual(run.items_collected, 1)
-            self.assertEqual(transport.tokens, ["secret-token", "secret-token"])
-            self.assertTrue(Path(run.output_path).exists())
             runs_payload = json.loads((root / "runs.json").read_text(encoding="utf-8"))
             self.assertEqual(runs_payload["runs"][0]["source_id"], "x")
-            self.assertNotIn("secret-token", json.dumps(runs_payload))
 
     def test_run_ids_include_microseconds_to_avoid_same_second_collisions(self):
         with tempfile.TemporaryDirectory() as tmpdir:

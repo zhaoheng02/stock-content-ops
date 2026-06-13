@@ -45,6 +45,7 @@ class DataSourceRun:
     items_collected: int
     output_path: str
     message: str = ""
+    airtap_task_id: str = ""
 
 
 class CredentialFile:
@@ -100,6 +101,16 @@ class JsonDataSourceRepository:
         runs.sort(key=lambda item: item.started_at, reverse=True)
         self._write_json(self.runs_path, {"runs": [_run_to_dict(item) for item in runs]})
         return run
+
+    def patch_run(self, run_id: str, changes: dict) -> None:
+        payload = self._read_json(self.runs_path, {"runs": []})
+        for row in payload.get("runs", []):
+            if row.get("id") == run_id:
+                row.update(changes)
+        self._write_json(self.runs_path, payload)
+
+    def list_runs_by_status(self, status: str) -> List[DataSourceRun]:
+        return [run for run in self.list_runs() if run.status == status]
 
     def list_posts(
         self,
@@ -263,6 +274,22 @@ class SupabaseDataSourceRepository:
         )
         return _run_from_supabase(rows[0]) if rows else run
 
+    def patch_run(self, run_id: str, changes: dict) -> None:
+        self.transport.request_json(
+            "PATCH",
+            "data_source_runs",
+            payload=changes,
+            query=f"id=eq.{_quote_value(run_id)}",
+        )
+
+    def list_runs_by_status(self, status: str) -> List[DataSourceRun]:
+        rows = self.transport.request_json(
+            "GET",
+            "data_source_runs",
+            query=f"status=eq.{_quote_value(status)}&select=*&order=started_at.desc",
+        )
+        return [_run_from_supabase(row) for row in rows]
+
     def list_posts(
         self,
         source_id: Optional[str] = None,
@@ -330,6 +357,10 @@ class DataSourceService:
         collector: Optional[Callable[["DataSourceConfig"], List[SourcePost]]] = None,
         records_collector: Optional[Callable[["DataSourceConfig"], List[dict]]] = None,
     ) -> DataSourceRun:
+        """Synchronous collection. Used by tests and the CLI (with an injected
+        collector / records_collector). The production Airtap path is async via
+        start_run + reconcile_run, but if neither collector is given this still
+        collects synchronously via Airtap (blocking), kept for CLI use."""
         source = self.repository.get_source(source_id)
         started_at = self.now()
         run_id = f"{source_id}-{_compact_timestamp(started_at)}"
@@ -345,36 +376,17 @@ class DataSourceService:
                 raise RuntimeError(f"unsupported data source platform: {source.platform}")
             if records_collector is not None:
                 records = list(records_collector(source))
-                posts = [
-                    SourcePost(
-                        id=record.get("post_id") or record["content_hash"],
-                        account=record.get("author_handle", ""),
-                        text=record.get("text", ""),
-                        url=record.get("url") or "",
-                        metrics=record.get("metrics") or {},
-                    )
-                    for record in records
-                ]
+                posts = _posts_from_records(records)
             elif collector is not None:
                 posts = list(collector(source))
             else:
-                # Default production path: collect via the Airtap cloud phone.
                 from .airtap_client import build_x_collection_prompt, collect_via_airtap
                 from .x_ingest import normalize_airtap_payload
 
                 prompt = build_x_collection_prompt(source.targets, posts_per_account=3)
                 payload = collect_via_airtap(prompt)
                 records = normalize_airtap_payload(payload, source_id=source_id, run_id=run_id)
-                posts = [
-                    SourcePost(
-                        id=record.get("post_id") or record["content_hash"],
-                        account=record.get("author_handle", ""),
-                        text=record.get("text", ""),
-                        url=record.get("url") or "",
-                        metrics=record.get("metrics") or {},
-                    )
-                    for record in records
-                ]
+                posts = _posts_from_records(records)
             items_collected = len(posts)
             try:
                 output_path = write_posts_json(
@@ -382,7 +394,6 @@ class DataSourceService:
                     str(Path(output_dir) / f"{source.id}-{_compact_timestamp(started_at)}.json"),
                 )
             except OSError:
-                # Read-only filesystem (e.g. Vercel). Supabase is the real store.
                 output_path = ""
             if records and hasattr(self.repository, "upsert_posts"):
                 for record in records:
@@ -410,6 +421,82 @@ class DataSourceService:
             raise RuntimeError(message)
 
         return run
+
+    def start_run(self, source_id: str) -> DataSourceRun:
+        """Kick off an async Airtap collection: create the task, record a pending
+        run with the task id, and return immediately. reconcile_run finishes it."""
+        from .airtap_client import build_x_collection_prompt, create_task
+
+        source = self.repository.get_source(source_id)
+        if source.platform != "x":
+            raise RuntimeError(f"unsupported data source platform: {source.platform}")
+        started_at = self.now()
+        run_id = f"{source_id}-{_compact_timestamp(started_at)}"
+        prompt = build_x_collection_prompt(source.targets, posts_per_account=3)
+        try:
+            task_id = create_task(prompt)
+        except Exception as error:
+            run = DataSourceRun(
+                id=run_id, source_id=source_id,
+                started_at=_format_datetime(started_at), finished_at=_format_datetime(self.now()),
+                status="failed", items_collected=0, output_path="", message=str(error),
+            )
+            self.repository.append_run(run)
+            raise
+        run = DataSourceRun(
+            id=run_id, source_id=source_id,
+            started_at=_format_datetime(started_at), finished_at=_format_datetime(started_at),
+            status="pending", items_collected=0, output_path="",
+            message="采集中…", airtap_task_id=task_id,
+        )
+        self.repository.append_run(run)
+        return run
+
+    def reconcile_run(self, run: DataSourceRun) -> DataSourceRun:
+        """Check one pending run's Airtap task; if done, ingest and update it."""
+        from .airtap_client import poll_until_done, latest_agent_text, AirtapError
+        from .x_ingest import extract_airtap_json, normalize_airtap_payload
+
+        if not run.airtap_task_id:
+            return run
+        # Single non-blocking-ish poll: short max_wait so cron/refresh stays fast.
+        details = poll_until_done(run.airtap_task_id, interval_secs=4.0, max_wait_secs=20.0)
+        state = details.get("_finalState")
+        if state in (None, "TIMEOUT") or state not in ("COMPLETED", "FAILED", "CANCELLED"):
+            return run  # still running; leave pending
+        changes = {"finished_at": _format_datetime(self.now())}
+        if state == "COMPLETED":
+            text = latest_agent_text(details)
+            payload = extract_airtap_json(text)
+            if payload is None:
+                changes.update(status="failed", message="采集完成但未返回可解析结果")
+            else:
+                records = normalize_airtap_payload(payload, source_id=run.source_id, run_id=run.id)
+                new_items = 0
+                if records and hasattr(self.repository, "upsert_posts"):
+                    new_items = self.repository.upsert_posts(records)
+                changes.update(
+                    status="success",
+                    items_collected=len(records),
+                    message=f"new={new_items}",
+                )
+        else:
+            changes.update(status="failed", message=f"Airtap 任务{state}")
+        self.repository.patch_run(run.id, changes)
+        return run
+
+    def reconcile_pending(self, limit: int = 5) -> List[dict]:
+        results = []
+        if not hasattr(self.repository, "list_runs_by_status"):
+            return results
+        pending = self.repository.list_runs_by_status("pending")[:limit]
+        for run in pending:
+            try:
+                self.reconcile_run(run)
+                results.append({"run_id": run.id, "reconciled": True})
+            except Exception as error:
+                results.append({"run_id": run.id, "error": str(error)})
+        return results
 
     def list_due_sources(self, output_dir: str = "data/inbox") -> List[DataSourceConfig]:
         """Return enabled sources whose cadence has elapsed since the last run."""
@@ -439,11 +526,24 @@ class DataSourceService:
         results = []
         for source in self.list_due_sources(output_dir=output_dir):
             try:
-                run = self.run_source(source.id, output_dir=output_dir)
-                results.append({"source_id": source.id, "status": run.status, "items": run.items_collected})
+                run = self.start_run(source.id)
+                results.append({"source_id": source.id, "status": run.status, "run_id": run.id})
             except Exception as error:
                 results.append({"source_id": source.id, "status": "failed", "error": str(error)})
         return results
+
+
+def _posts_from_records(records: List[dict]) -> List[SourcePost]:
+    return [
+        SourcePost(
+            id=record.get("post_id") or record["content_hash"],
+            account=record.get("author_handle", ""),
+            text=record.get("text", ""),
+            url=record.get("url") or "",
+            metrics=record.get("metrics") or {},
+        )
+        for record in records
+    ]
 
 
 def parse_account_targets(text: str) -> Tuple[str, ...]:
@@ -592,6 +692,7 @@ def _run_from_dict(payload: dict) -> DataSourceRun:
         items_collected=int(payload.get("items_collected", 0)),
         output_path=str(payload.get("output_path", "")),
         message=str(payload.get("message", "")),
+        airtap_task_id=str(payload.get("airtap_task_id", "")),
     )
 
 

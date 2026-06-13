@@ -125,7 +125,7 @@ export function SourcesPage({ selectedSource, setSelectedSource }) {
     setRunning(true);
     setApiError("");
     try {
-      const payload = await api.post("/api/source-runs", { source_id: current.id, out: "/tmp/inbox" });
+      const payload = await api.post("/api/source-runs", { source_id: current.id });
       setRuns((items) => [payload.run, ...items]);
     } catch (error) {
       setApiError(error.message);
@@ -133,6 +133,26 @@ export function SourcesPage({ selectedSource, setSelectedSource }) {
       setRunning(false);
     }
   };
+
+  // Auto-reconcile pending Airtap runs: while any run is pending, poll the
+  // reconcile endpoint and refresh the run list until it resolves.
+  const hasPending = runs.some((r) => r.status === "pending");
+  useEffect(() => {
+    if (!hasPending || !current?.id || isPlaceholder) return;
+    let active = true;
+    const tick = async () => {
+      try {
+        await api.post("/api/reconcile", {});
+        const payload = await api.get(`/api/source-runs?source_id=${encodeURIComponent(current.id)}&limit=8`);
+        if (active) setRuns(payload.runs || []);
+      } catch {
+        /* keep polling */
+      }
+    };
+    const timer = setInterval(tick, 12000);
+    tick();
+    return () => { active = false; clearInterval(timer); };
+  }, [hasPending, current?.id, isPlaceholder]);
 
   const openLog = async (run) => {
     if (!run?.id) return;
@@ -207,9 +227,9 @@ export function SourcesPage({ selectedSource, setSelectedSource }) {
                 <p className="mt-0.5 text-sm text-muted-foreground">实时运行状态与采集调度</p>
               </div>
             </div>
-            <Button variant="outline" className="w-28 shrink-0 gap-1.5" onClick={runNow} disabled={isPlaceholder || !currentRemote || running}>
-              {running ? <Loader2 className="size-4 animate-spin" /> : <Play className="size-4" />}
-              {running ? "运行中" : "立即运行"}
+            <Button variant="outline" className="w-28 shrink-0 gap-1.5" onClick={runNow} disabled={isPlaceholder || !currentRemote || running || hasPending}>
+              {running || hasPending ? <Loader2 className="size-4 animate-spin" /> : <Play className="size-4" />}
+              {hasPending ? "采集中" : running ? "运行中" : "立即运行"}
             </Button>
           </CardHeader>
           <CardContent className="space-y-6">
@@ -250,11 +270,11 @@ export function SourcesPage({ selectedSource, setSelectedSource }) {
                 <div className="overflow-hidden rounded-xl border">
                   {runs.map(runToRow).map((r, i) => (
                     <div key={r.id} className={cn("flex items-center gap-4 px-4 py-3.5 text-sm transition-colors hover:bg-muted/40", i > 0 && "border-t")}>
-                      <span className={cn("size-2 shrink-0 rounded-full", r.ok ? "bg-success" : "bg-muted-foreground/50")} />
+                      <span className={cn("size-2 shrink-0 rounded-full", r.pending ? "bg-warning animate-pulse" : r.ok ? "bg-success" : "bg-muted-foreground/50")} />
                       <span className="w-12 shrink-0 font-medium text-foreground tnum">{r.time}</span>
                       <span className="flex-1 text-foreground/90">{r.text}</span>
                       <span className="shrink-0 text-muted-foreground tnum">耗时 {r.cost}</span>
-                      <Button variant="ghost" size="sm" className="shrink-0 text-primary" disabled={!r.run} onClick={() => r.run && openLog(r.run)}>
+                      <Button variant="ghost" size="sm" className="shrink-0 text-primary" disabled={!r.run || r.pending} onClick={() => r.run && openLog(r.run)}>
                         查看日志
                       </Button>
                     </div>
@@ -500,14 +520,20 @@ function sourceToRow(source) {
 
 function runToRow(run) {
   const ok = run.status === "success";
+  const pending = run.status === "pending";
   const newMatch = /new=(\d+)/.exec(run.message || "");
   const newPart = ok && newMatch ? `（新增 ${newMatch[1]} 条）` : "";
+  let text;
+  if (pending) text = "采集中… Airtap 云手机正在抓取";
+  else if (ok) text = `成功采集 ${run.items_collected} 条${newPart}`;
+  else text = run.message || "运行失败";
   return {
     id: run.id,
     run,
+    pending,
     time: new Date(run.started_at).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" }),
-    text: ok ? `成功采集 ${run.items_collected} 条${newPart}` : run.message || "运行失败",
-    cost: elapsed(run.started_at, run.finished_at),
+    text,
+    cost: pending ? "—" : elapsed(run.started_at, run.finished_at),
     ok,
   };
 }

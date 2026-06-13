@@ -143,7 +143,7 @@ class CliTest(unittest.TestCase):
 
                 self.assertEqual(code, 1)
                 self.assertIn("error=", stdout.getvalue())
-                self.assertIn("X_BEARER_TOKEN", stdout.getvalue())
+                self.assertIn("AIRTAP_PERSONAL_ACCESS_TOKEN", stdout.getvalue())
             finally:
                 os.chdir(original_cwd)
 
