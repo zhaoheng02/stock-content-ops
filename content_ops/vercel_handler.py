@@ -1,29 +1,23 @@
-"""Shared Vercel serverless handler for the content-ops API.
+"""Vercel serverless handler factory for the content-ops API.
 
-Vercel Python functions expose a `handler` class subclassing
-BaseHTTPRequestHandler. Each api/*.py route reuses this via build_handler().
-Storage is Supabase in production (SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY);
-falls back to local JSON only when those are absent (local dev).
+Each api/*.py route imports build_handler() from here. Storage is Supabase in
+production (SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY); falls back to local JSON
+only when those are absent (local dev).
 """
 
 import json
 import os
-import sys
 from http.server import BaseHTTPRequestHandler
-from pathlib import Path
 
-# Make the repo root importable so `content_ops` resolves on Vercel.
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-
-from content_ops.data_sources import (  # noqa: E402
+from .data_sources import (
     DataSourceService,
     SupabaseDataSourceRepository,
     default_data_source_repository,
 )
-from content_ops.server import create_app  # noqa: E402
+from .server import create_app
 
 
-def _build_service() -> DataSourceService:
+def build_service() -> DataSourceService:
     if os.environ.get("SUPABASE_URL") and os.environ.get("SUPABASE_SERVICE_ROLE_KEY"):
         return DataSourceService(SupabaseDataSourceRepository.from_env())
     return DataSourceService(default_data_source_repository())
@@ -46,10 +40,14 @@ def build_handler():
             try:
                 length = int(self.headers.get("Content-Length") or "0")
                 body = self.rfile.read(length) if length else b""
-                app = create_app(_build_service())
+                app = create_app(build_service())
                 status, headers, response_body = app.handle(self.command, self.path, body)
-            except Exception as error:  # surface config errors as JSON, not 500 HTML
-                status, headers, response_body = 500, {"Content-Type": "application/json"}, json.dumps({"error": str(error)})
+            except Exception as error:
+                status, headers, response_body = (
+                    500,
+                    {"Content-Type": "application/json"},
+                    json.dumps({"error": str(error)}),
+                )
             encoded = response_body.encode("utf-8")
             self.send_response(status)
             self._cors()
