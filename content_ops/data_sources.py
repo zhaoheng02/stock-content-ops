@@ -484,22 +484,29 @@ class DataSourceService:
             removed = [t for t in previous_targets if t not in current]
             if removed and hasattr(self.repository, "delete_monitored_accounts"):
                 self.repository.delete_monitored_accounts(saved.id, removed)
-            new_handles = [
+            missing_avatar_handles = [
                 low for low in current
-                if low not in previous_targets and not accounts_by_handle.get(low, {}).get("avatar_url")
+                if not accounts_by_handle.get(low, {}).get("avatar_url")
             ]
             # Seed rows for new handles so the popover shows them immediately.
-            if new_handles:
+            if missing_avatar_handles:
                 self.repository.upsert_monitored_accounts([
-                    {"source_id": saved.id, "handle": h} for h in new_handles
+                    {"source_id": saved.id, "handle": h} for h in missing_avatar_handles
                 ])
                 # One-time profile/avatar fetch for the new handles, async so the
                 # save request returns immediately (Airtap takes minutes).
-                try:
-                    self.start_onboarding(saved.id, new_handles)
-                except Exception:
-                    pass  # profiles are best-effort; collection still works
+                if not self._has_pending_profile_run(saved.id):
+                    try:
+                        self.start_onboarding(saved.id, missing_avatar_handles)
+                    except Exception:
+                        pass  # profiles are best-effort; collection still works
         return saved
+
+    def _has_pending_profile_run(self, source_id: str) -> bool:
+        return any(
+            run.kind == "profile" and run.status == "pending"
+            for run in self.repository.list_runs(source_id=source_id, limit=20)
+        )
 
     def start_onboarding(self, source_id: str, handles: List[str]) -> DataSourceRun:
         """Async one-time profile fetch run (kind=profile) for new handles."""
