@@ -12,3 +12,8 @@ alter table public.data_source_runs
 
 alter table public.data_source_runs
   add column if not exists airtap_task_id text not null default '';
+
+-- The content_hash primary key already dedupes posts. The secondary unique
+-- index on (platform, post_id) conflicts with content_hash upserts when a
+-- re-collected post keeps its id but its text changes, causing 409s. Drop it.
+drop index if exists public.source_posts_platform_postid_idx;
