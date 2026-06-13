@@ -4,6 +4,9 @@ from typing import Optional, Tuple
 from urllib.parse import parse_qs, urlparse
 
 from .data_sources import DataSourceConfig, DataSourceService, parse_account_targets
+from .generator import generate_assets
+from .models import SourcePost
+from .settings import DEFAULT_PERSONA
 
 
 class DataSourceApi:
@@ -40,9 +43,43 @@ class DataSourceApi:
                     output_dir=str(payload.get("out", "data/inbox")),
                 )
                 return _json_response(201, {"run": run.__dict__})
+            if method == "POST" and parsed.path == "/api/generate":
+                payload = json.loads(body.decode("utf-8") or "{}")
+                return _json_response(200, {"drafts": self._generate_drafts(payload)})
             return _json_response(404, {"error": "not found"})
         except Exception as error:
             return _json_response(400, {"error": str(error)})
+
+    def _generate_drafts(self, payload: dict) -> list:
+        persona = str(payload.get("persona") or DEFAULT_PERSONA)
+        post_id = payload.get("post_id")
+        posts = self.service.list_posts(
+            source_id=payload.get("source_id"),
+            run_id=payload.get("run_id"),
+            limit=int(payload.get("limit", 3)) if not post_id else None,
+        )
+        if post_id:
+            posts = [p for p in posts if p.get("post_id") == post_id or p.get("content_hash") == post_id]
+        drafts = []
+        for record in posts:
+            post = SourcePost(
+                id=record.get("post_id") or record.get("content_hash", ""),
+                account=record.get("author_handle", ""),
+                text=record.get("text", ""),
+                url=record.get("url") or "",
+                metrics=record.get("metrics") or {},
+            )
+            assets = generate_assets(post, persona)
+            drafts.append({
+                "post_id": post.id,
+                "account": post.account,
+                "source_url": post.url,
+                "assets": {
+                    key: {"platform": a.platform, "title": a.title, "body": a.body}
+                    for key, a in assets.items()
+                },
+            })
+        return drafts
 
 
 def create_app(service: DataSourceService) -> DataSourceApi:
