@@ -1,5 +1,5 @@
 #!/bin/bash
 set -e
 cd web
-npm ci --no-audit --no-fund
-npm run build
+yarn install --frozen-lockfile --non-interactive
+yarn build
