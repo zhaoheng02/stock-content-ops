@@ -404,6 +404,68 @@ class DataSourceService:
             return self.repository.list_posts(source_id=source_id, run_id=run_id, limit=limit)
         return []
 
+    def list_source_accounts(self, source_id: str) -> List[dict]:
+        source = self.repository.get_source(source_id)
+        rows_by_handle = {}
+        if hasattr(self.repository, "list_monitored_accounts"):
+            for row in self.repository.list_monitored_accounts(source_id):
+                handle = _normalize_target(str(row.get("handle", ""))).lower()
+                if handle:
+                    rows_by_handle[handle] = dict(row)
+
+        changed = False
+        for target in source.targets:
+            handle = target.lower()
+            if handle not in rows_by_handle:
+                rows_by_handle[handle] = {"source_id": source_id, "handle": handle}
+                changed = True
+
+        posts = self.list_posts(source_id=source_id, limit=500)
+        backfill_rows = []
+        for post in posts:
+            handle = _normalize_target(str(post.get("author_handle", ""))).lower()
+            if not handle or handle not in rows_by_handle:
+                continue
+            row = rows_by_handle[handle]
+            updates = {}
+            if post.get("author_name") and not row.get("author_name"):
+                updates["author_name"] = post.get("author_name")
+            if post.get("author_avatar_url") and not row.get("avatar_url"):
+                updates["avatar_url"] = post.get("author_avatar_url")
+            if post.get("author_bio") and not row.get("bio"):
+                updates["bio"] = post.get("author_bio")
+            if post.get("url") and not row.get("profile_url"):
+                updates["profile_url"] = f"https://x.com/{handle}"
+            published = post.get("published_at")
+            if published and (not row.get("last_post_at") or published > row.get("last_post_at")):
+                updates["last_post_at"] = published
+            if updates:
+                row.update(updates)
+                backfill_rows.append(row)
+
+        if changed or backfill_rows:
+            rows = [rows_by_handle[h] for h in sorted(rows_by_handle)]
+            if hasattr(self.repository, "upsert_monitored_accounts"):
+                self.repository.upsert_monitored_accounts(rows)
+
+        return [rows_by_handle[h] for h in sorted(rows_by_handle)]
+
+    def update_source_accounts(self, source_id: str, targets: Tuple[str, ...]) -> DataSourceConfig:
+        source = self.repository.get_source(source_id)
+        updated = DataSourceConfig(
+            id=source.id,
+            name=source.name,
+            platform=source.platform,
+            cadence_minutes=source.cadence_minutes,
+            targets=targets,
+            min_score=source.min_score,
+            material_strategy=source.material_strategy,
+            credential_key=source.credential_key,
+            credential_file=source.credential_file,
+            enabled=source.enabled,
+        )
+        return self.save_source(updated)
+
     def save_source(self, source: DataSourceConfig) -> DataSourceConfig:
         normalized = _normalize_source(source)
         try:

@@ -39,15 +39,21 @@ class DataSourceApi:
                 source_id = _first(query.get("source_id"))
                 limit = int(_first(query.get("limit")) or "5")
                 offset = int(_first(query.get("offset")) or "0")
-                all_runs = [r for r in self.service.list_runs(source_id=source_id) if r.kind == "collect"]
+                all_runs = self.service.list_runs(source_id=source_id)
                 page = all_runs[offset:offset + limit]
                 return _json_response(200, {"runs": [r.__dict__ for r in page], "total": len(all_runs)})
             if method == "GET" and parsed.path == "/api/source-accounts":
                 source_id = _first(query.get("source_id"))
-                accounts = []
-                if hasattr(self.service.repository, "list_monitored_accounts") and source_id:
-                    accounts = self.service.repository.list_monitored_accounts(source_id)
+                accounts = self.service.list_source_accounts(source_id) if source_id else []
                 return _json_response(200, {"accounts": accounts})
+            if method == "POST" and parsed.path == "/api/source-accounts":
+                payload = json.loads(body.decode("utf-8") or "{}")
+                source = self.service.update_source_accounts(
+                    str(payload.get("source_id", "")),
+                    parse_account_targets(str(payload.get("targets", ""))),
+                )
+                accounts = self.service.list_source_accounts(source.id)
+                return _json_response(200, {"source": _public_source(source), "accounts": accounts})
             if method == "GET" and parsed.path == "/api/source-posts":
                 source_id = _first(query.get("source_id"))
                 run_id = _first(query.get("run_id"))

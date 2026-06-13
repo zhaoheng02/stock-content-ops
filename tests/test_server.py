@@ -58,6 +58,34 @@ class ServerApiTest(unittest.TestCase):
             self.assertEqual(status, 200)
             self.assertEqual(json.loads(body), {"runs": [], "total": 0})
 
+    def test_source_accounts_api_updates_accounts_separately_from_frequency(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = JsonDataSourceRepository(Path(tmpdir) / "sources.json", Path(tmpdir) / "runs.json")
+            service = DataSourceService(repo)
+            service.start_onboarding = lambda source_id, handles: None
+            service.save_source(
+                DataSourceConfig(
+                    id="x",
+                    name="X",
+                    platform="x",
+                    cadence_minutes=120,
+                    targets=("old",),
+                )
+            )
+            client = create_app(service)
+
+            status, _, body = client.handle(
+                "POST",
+                "/api/source-accounts",
+                json.dumps({"source_id": "x", "targets": "@new_a, @new_b"}).encode("utf-8"),
+            )
+            payload = json.loads(body)
+
+            self.assertEqual(status, 200)
+            self.assertEqual(payload["source"]["cadence_minutes"], 120)
+            self.assertEqual(payload["source"]["targets"], ["new_a", "new_b"])
+            self.assertEqual([row["handle"] for row in payload["accounts"]], ["new_a", "new_b"])
+
     def test_run_source_api_returns_structured_errors(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)

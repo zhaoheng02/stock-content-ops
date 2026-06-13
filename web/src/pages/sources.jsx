@@ -26,6 +26,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { PageHeader } from "@/components/app/page-header";
 import { StatusBadge } from "@/components/app/status-badge";
 import { BrandIcon } from "@/components/app/brand-icon";
 import { cn } from "@/lib/utils";
@@ -78,7 +79,7 @@ export function SourcesPage({ selectedSource, setSelectedSource }) {
   const currentRemote = remoteSources.find((s) => s.id === current?.id);
 
   const lastRunText = runs.length
-    ? `${new Date(runs[0].started_at).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })}`
+    ? `${new Date(runs[0].started_at).toLocaleString("zh-CN", { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })}`
     : (isPlaceholder ? "未接入" : "等待运行");
 
   const config = [
@@ -193,15 +194,16 @@ export function SourcesPage({ selectedSource, setSelectedSource }) {
 
   return (
     <div className="space-y-6">
-      <div className="flex w-full max-w-xl items-center justify-between gap-4 rounded-lg border bg-card px-4 py-3 shadow-sm">
-        <div className="min-w-0">
-          <p className="text-xs font-semibold tracking-wide text-primary">数据源</p>
-          <h1 className="mt-1 text-lg font-bold tracking-tight text-foreground">海外内容采集中心</h1>
-        </div>
-        <Button onClick={() => !isPlaceholder && setConfigOpen(true)} disabled={isPlaceholder} className="shrink-0">
-          数据源配置
-        </Button>
-      </div>
+      <PageHeader
+        eyebrow="数据源"
+        title="海外内容采集中心"
+        description="统一管理海外内容源的采集频率、账号资料和运行记录。"
+        actions={
+          <Button onClick={() => !isPlaceholder && setConfigOpen(true)} disabled={isPlaceholder}>
+            数据源配置
+          </Button>
+        }
+      />
       {(apiError || loading) && (
         <div className="flex items-center gap-2 rounded-lg border bg-muted/30 px-3.5 py-2.5 text-sm text-muted-foreground">
           {loading ? <Loader2 className="size-4 animate-spin" /> : <AlertCircle className="size-4 text-warning-foreground" />}
@@ -292,7 +294,7 @@ export function SourcesPage({ selectedSource, setSelectedSource }) {
                   {runs.map(runToRow).map((r, i) => (
                     <div key={r.id} className={cn("flex items-center gap-4 px-4 py-3.5 text-sm transition-colors hover:bg-muted/40", i > 0 && "border-t")}>
                       <span className={cn("size-2 shrink-0 rounded-full", r.pending ? "bg-warning animate-pulse" : r.ok ? "bg-success" : "bg-muted-foreground/50")} />
-                      <span className="w-12 shrink-0 font-medium text-foreground tnum">{r.time}</span>
+                      <span className="w-36 shrink-0 font-medium text-foreground tnum">{r.time}</span>
                       <span className="flex-1 text-foreground/90">{r.text}</span>
                       <span className="shrink-0 text-muted-foreground tnum">耗时 {r.cost}</span>
                       <Button variant="ghost" size="sm" className="shrink-0 text-primary" disabled={!r.run || r.pending} onClick={() => r.run && openLog(r.run)}>
@@ -341,14 +343,12 @@ export function SourcesPage({ selectedSource, setSelectedSource }) {
 }
 
 function SourceConfigDialog({ open, onClose, source, onSaved }) {
-  const [targets, setTargets] = useState("");
   const [cadence, setCadence] = useState(30);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
   useEffect(() => {
     if (open && source) {
-      setTargets((source.targets || []).join(", "));
       setCadence(source.cadence_minutes || 30);
       setError("");
     }
@@ -363,7 +363,7 @@ function SourceConfigDialog({ open, onClose, source, onSaved }) {
         name: source.name,
         platform: source.platform,
         cadence_minutes: Number(cadence),
-        targets,
+        targets: (source.targets || []).join(", "),
       });
       window.dispatchEvent(new CustomEvent("sources:changed", { detail: payload.source }));
       onSaved(payload.source);
@@ -380,16 +380,7 @@ function SourceConfigDialog({ open, onClose, source, onSaved }) {
         <DialogHeader>
           <DialogTitle>数据源配置 · {source?.name}</DialogTitle>
         </DialogHeader>
-        <div className="space-y-4">
-          <div className="space-y-1.5">
-            <Label className="text-xs text-muted-foreground">监控账号（逗号或换行分隔，可加 @）</Label>
-            <Textarea
-              value={targets}
-              onChange={(e) => setTargets(e.target.value)}
-              className="min-h-28"
-              placeholder="@ArtofSpecuycky, @hanking66, @xiaomustock"
-            />
-          </div>
+        <div className="space-y-4 py-1">
           <div className="space-y-1.5">
             <Label className="text-xs text-muted-foreground">采集频率（最小 30 分钟，最大 24 小时）</Label>
             <Select value={String(cadence)} onValueChange={(v) => setCadence(Number(v))}>
@@ -409,7 +400,7 @@ function SourceConfigDialog({ open, onClose, source, onSaved }) {
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={onClose}>取消</Button>
-          <Button onClick={save} disabled={saving || !targets.trim()}>
+          <Button onClick={save} disabled={saving}>
             {saving && <Loader2 className="mr-1.5 size-4 animate-spin" />}保存配置
           </Button>
         </DialogFooter>
@@ -419,14 +410,18 @@ function SourceConfigDialog({ open, onClose, source, onSaved }) {
 }
 
 function AccountsDialog({ open, onClose, source }) {
-  const [profiles, setProfiles] = useState([]);
+  const [profiles, setProfiles] = useState({});
+  const [targets, setTargets] = useState("");
   const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
   const handles = source?.targets || [];
 
-  useEffect(() => {
-    if (!open || !source?.id) return;
+  const loadAccounts = () => {
+    if (!source?.id) return Promise.resolve();
     setLoading(true);
-    api.get(`/api/source-accounts?source_id=${encodeURIComponent(source.id)}`)
+    setError("");
+    return api.get(`/api/source-accounts?source_id=${encodeURIComponent(source.id)}`)
       .then((p) => {
         const byHandle = {};
         for (const account of p.accounts || []) {
@@ -437,49 +432,116 @@ function AccountsDialog({ open, onClose, source }) {
               name: account.author_name,
               avatar: account.avatar_url,
               lastPostAt: account.last_post_at,
+              onboardedAt: account.onboarded_at,
+              bio: account.bio,
             };
           }
         }
         setProfiles(byHandle);
       })
-      .catch(() => setProfiles({}))
+      .catch((err) => {
+        setProfiles({});
+        setError(err.message || "账号资料加载失败");
+      })
       .finally(() => setLoading(false));
+  };
+
+  useEffect(() => {
+    if (!open || !source?.id) return;
+    setTargets((source.targets || []).join(", "));
+    loadAccounts();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, source?.id]);
+
+  const save = async () => {
+    if (!source?.id) return;
+    setSaving(true);
+    setError("");
+    try {
+      const payload = await api.post("/api/source-accounts", {
+        source_id: source.id,
+        targets,
+      });
+      window.dispatchEvent(new CustomEvent("sources:changed", { detail: payload.source }));
+      setTargets((payload.source?.targets || []).join(", "));
+      await loadAccounts();
+    } catch (err) {
+      setError(err.message || "账号保存失败");
+    } finally {
+      setSaving(false);
+    }
+  };
 
   return (
     <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent className="sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle>监控账号 · {handles.length} 个</DialogTitle>
         </DialogHeader>
-        <div className="max-h-[60vh] space-y-2 overflow-y-auto">
-          {loading && <p className="text-sm text-muted-foreground">正在加载账号信息...</p>}
-          {handles.map((handle) => {
-            const key = String(handle).toLowerCase().replace(/^@/, "");
-            const prof = (profiles || {})[key] || (profiles || {})[`@${key}`] || {};
-            return (
-              <div key={handle} className="flex items-center gap-3 rounded-xl border bg-card p-3">
-                {prof.avatar ? (
-                  <img src={prof.avatar} alt={handle} className="size-10 shrink-0 rounded-full object-cover" />
-                ) : (
-                  <span className="grid size-10 shrink-0 place-items-center rounded-full bg-muted text-sm">
-                    {String(handle).replace(/^@/, "").slice(0, 2)}
-                  </span>
-                )}
-                <div className="min-w-0">
-                  <p className="truncate text-sm font-semibold text-foreground">{prof.name || String(handle).replace(/^@/, "")}</p>
-                  <p className="truncate text-xs text-muted-foreground">@{String(handle).replace(/^@/, "")}</p>
-                  {prof.lastPostAt && (
-                    <p className="truncate text-xs text-muted-foreground">
-                      最近采集 {new Date(prof.lastPostAt).toLocaleString("zh-CN")}
-                    </p>
-                  )}
-                </div>
-              </div>
-            );
-          })}
-          {!handles.length && <p className="text-sm text-muted-foreground">尚未配置监控账号。</p>}
+        <div className="space-y-4">
+          <div className="space-y-1.5">
+            <Label className="text-xs text-muted-foreground">监控账号（逗号或换行分隔，可加 @）</Label>
+            <Textarea
+              value={targets}
+              onChange={(e) => setTargets(e.target.value)}
+              className="min-h-24"
+              placeholder="@ArtofSpecuycky, @hanking66, @xiaomustock"
+            />
+          </div>
+          {error && <p className="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">{error}</p>}
+          <div className="overflow-hidden rounded-lg border">
+            <div className="grid grid-cols-[minmax(180px,1.2fr)_minmax(120px,0.8fr)_minmax(160px,1fr)] gap-3 border-b bg-muted/40 px-3 py-2 text-xs font-medium text-muted-foreground">
+              <span>账号</span>
+              <span>头像状态</span>
+              <span>最近采集</span>
+            </div>
+            <div className="max-h-[42vh] overflow-y-auto">
+              {loading && <p className="px-3 py-3 text-sm text-muted-foreground">正在加载账号信息...</p>}
+              {!loading && handles.map((handle) => {
+                const key = String(handle).toLowerCase().replace(/^@/, "");
+                const prof = (profiles || {})[key] || (profiles || {})[`@${key}`] || {};
+                return (
+                  <div key={handle} className="grid grid-cols-[minmax(180px,1.2fr)_minmax(120px,0.8fr)_minmax(160px,1fr)] items-center gap-3 border-b px-3 py-3 last:border-b-0">
+                    <div className="flex min-w-0 items-center gap-3">
+                      {prof.avatar ? (
+                        <img src={prof.avatar} alt={handle} className="size-10 shrink-0 rounded-full object-cover" />
+                      ) : (
+                        <span className="grid size-10 shrink-0 place-items-center rounded-full bg-muted text-sm font-medium text-muted-foreground">
+                          {String(handle).replace(/^@/, "").slice(0, 2)}
+                        </span>
+                      )}
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-semibold text-foreground">{prof.name || String(handle).replace(/^@/, "")}</p>
+                        <p className="truncate text-xs text-muted-foreground">@{String(handle).replace(/^@/, "")}</p>
+                      </div>
+                    </div>
+                    <span className={cn("text-sm", prof.avatar ? "text-success" : "text-warning-foreground")}>
+                      {prof.avatar ? "已保存" : "待获取"}
+                    </span>
+                    <span className="text-sm text-muted-foreground">
+                      {prof.lastPostAt ? new Date(prof.lastPostAt).toLocaleString("zh-CN") : "—"}
+                    </span>
+                  </div>
+                );
+              })}
+              {!loading && !handles.length && (
+                <p className="px-3 py-3 text-sm text-muted-foreground">尚未配置监控账号。</p>
+              )}
+            </div>
+          </div>
+          <div className="flex items-start gap-2 rounded-lg bg-muted/50 px-3 py-2.5 text-xs text-muted-foreground">
+            <AlertCircle className="mt-0.5 size-3.5 shrink-0" />
+            <span>
+              新增账号会创建一次 Airtap 头像获取任务，完成后头像会永久保存；后续帖子采集只复用已保存头像。
+            </span>
+          </div>
         </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>关闭</Button>
+          <Button onClick={save} disabled={saving || !targets.trim()}>
+            {saving && <Loader2 className="mr-1.5 size-4 animate-spin" />}保存账号
+          </Button>
+        </DialogFooter>
       </DialogContent>
     </Dialog>
   );
@@ -561,17 +623,21 @@ function sourceToRow(source) {
 function runToRow(run) {
   const ok = run.status === "success";
   const pending = run.status === "pending";
+  const profile = run.kind === "profile";
   const newMatch = /new=(\d+)/.exec(run.message || "");
+  const profileMatch = /profiles=(\d+)/.exec(run.message || "");
   const newPart = ok && newMatch ? `（新增 ${newMatch[1]} 条）` : "";
   let text;
-  if (pending) text = "采集中… Airtap 云手机正在抓取";
+  if (pending && profile) text = "获取头像中… Airtap 云手机正在读取账号资料";
+  else if (pending) text = "采集中… Airtap 云手机正在抓取";
+  else if (ok && profile) text = `头像资料已保存 ${profileMatch ? profileMatch[1] : run.items_collected} 个`;
   else if (ok) text = `成功采集 ${run.items_collected} 条${newPart}`;
   else text = run.message || "运行失败";
   return {
     id: run.id,
     run,
     pending,
-    time: new Date(run.started_at).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" }),
+    time: new Date(run.started_at).toLocaleString("zh-CN", { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }),
     text,
     cost: pending ? "—" : elapsed(run.started_at, run.finished_at),
     ok,
