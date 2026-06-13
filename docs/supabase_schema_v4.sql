@@ -16,6 +16,27 @@ create table if not exists public.monitored_accounts (
 
 alter table public.monitored_accounts enable row level security;
 
+drop policy if exists monitored_accounts_public_read on public.monitored_accounts;
+create policy monitored_accounts_public_read
+  on public.monitored_accounts for select
+  using (true);
+
+drop policy if exists monitored_accounts_public_insert on public.monitored_accounts;
+create policy monitored_accounts_public_insert
+  on public.monitored_accounts for insert
+  with check (true);
+
+drop policy if exists monitored_accounts_public_update on public.monitored_accounts;
+create policy monitored_accounts_public_update
+  on public.monitored_accounts for update
+  using (true)
+  with check (true);
+
+drop policy if exists monitored_accounts_public_delete on public.monitored_accounts;
+create policy monitored_accounts_public_delete
+  on public.monitored_accounts for delete
+  using (true);
+
 -- 'collect' = post collection (no avatars); 'profile' = one-time avatar/profile fetch.
 alter table public.data_source_runs
   add column if not exists kind text not null default 'collect';
