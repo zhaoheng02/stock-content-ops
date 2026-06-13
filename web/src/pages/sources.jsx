@@ -142,7 +142,7 @@ export function SourcesPage({ selectedSource, setSelectedSource }) {
     let active = true;
     const tick = async () => {
       try {
-        await api.post("/api/reconcile", {});
+        await api.get("/api/cron");
         const payload = await api.get(`/api/source-runs?source_id=${encodeURIComponent(current.id)}&limit=8`);
         if (active) setRuns(payload.runs || []);
       } catch {
