@@ -189,15 +189,21 @@ levelsio,indie_dev,1,independent developer business cases
 
 ## 部署到 Vercel
 
-前端为 Vite 静态站点，后端 API 改为 Vercel Python serverless 函数（`api/*.py`），数据存储使用 Supabase。
+前端为 Vite 静态站点，后端 API 改为 Vercel Python serverless 函数（`api/*.py`），数据存储使用 Supabase。仓库已与 GitHub 连接，推送到 `main` 即自动部署。
 
 1. 在 Supabase SQL Editor 执行 `docs/supabase_schema.sql` 建表（含 `source_posts`）。
-2. 将仓库导入 Vercel，框架预设选 “Other”，构建命令与输出目录已在 `vercel.json` 配置：
-   - Build Command: `cd web && npm install && npm run build`
+2. 仓库导入 Vercel，框架预设选 “Other”。构建配置见 `vercel.json`：
+   - Build Command: `bash build.sh`（用 `yarn install --frozen-lockfile` + `vite build`）
    - Output Directory: `web/dist`
 3. 在 Vercel 项目的 Environment Variables 配置：
    - `SUPABASE_URL`
    - `SUPABASE_SERVICE_ROLE_KEY`
-4. 部署后，前端通过同源 `/api/sources`、`/api/source-runs`、`/api/source-posts` 访问后端。
+4. 部署后，前端通过同源 `/api/sources`、`/api/source-runs`、`/api/source-posts`、`/api/generate` 访问后端。
 
-本地开发：在 `web/.env` 设置 `VITE_API_BASE_URL=http://127.0.0.1:8787`，并运行 `python3 -m content_ops serve`。
+构建踩坑记录（保持现状即可，勿回退）：
+
+- 用 `yarn` 而非 `npm`：Vercel 构建机上 `npm install`/`npm ci` 会崩在 “Exit handler never called!”。
+- `web/yarn.lock` 必须解析自公网 `registry.npmjs.org`，不能含内网 `bnpm.byted.org`（构建机访问不到）。`web/.yarnrc` 已锁定公网源。
+- 每个 `api/*.py` 必须**直接定义** `class handler(...)`（Vercel 用 AST 识别入口），不能用 `handler = build_handler()` 这类赋值，否则函数会被丢弃、路由 404。公共逻辑放在 `content_ops/vercel_handler.py` 的 `ContentOpsHandler`，各路由 `class handler(ContentOpsHandler): pass`。
+
+本地开发：在 `web/.env` 设置 `VITE_API_BASE_URL=http://127.0.0.1:8787`，并运行 `python3 -m content_ops serve`。生产环境前端默认走同源相对路径 `/api/*`。
