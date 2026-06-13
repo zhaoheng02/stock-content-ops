@@ -7,6 +7,6 @@
     "api/source-runs.py": { "maxDuration": 300 }
   },
   "crons": [
-    { "path": "/api/cron", "schedule": "0 * * * *" }
+    { "path": "/api/cron", "schedule": "0 0 * * *" }
   ]
 }
