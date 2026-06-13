@@ -14,6 +14,8 @@ create table if not exists public.monitored_accounts (
   primary key (source_id, handle)
 );
 
+alter table public.monitored_accounts enable row level security;
+
 -- 'collect' = post collection (no avatars); 'profile' = one-time avatar/profile fetch.
 alter table public.data_source_runs
   add column if not exists kind text not null default 'collect';
