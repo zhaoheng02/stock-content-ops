@@ -480,7 +480,7 @@ function AccountsDialog({ open, onClose, source }) {
 
   return (
     <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="sm:max-w-2xl">
+      <DialogContent className="max-h-[92vh] overflow-y-auto sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle>监控账号 · {handles.length} 个</DialogTitle>
         </DialogHeader>
@@ -496,18 +496,19 @@ function AccountsDialog({ open, onClose, source }) {
           </div>
           {error && <p className="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">{error}</p>}
           <div className="overflow-hidden rounded-lg border">
-            <div className="grid grid-cols-[minmax(180px,1.2fr)_minmax(120px,0.8fr)_minmax(160px,1fr)] gap-3 border-b bg-muted/40 px-3 py-2 text-xs font-medium text-muted-foreground">
+            <div className="hidden grid-cols-[minmax(180px,1.2fr)_minmax(120px,0.8fr)_minmax(160px,1fr)] gap-3 border-b bg-muted/40 px-3 py-2 text-xs font-medium text-muted-foreground sm:grid">
               <span>账号</span>
               <span>头像状态</span>
               <span>最近采集</span>
             </div>
-            <div className="max-h-[42vh] overflow-y-auto">
+            <div className="max-h-[42vh] overflow-y-auto sm:max-h-[46vh]">
               {loading && <p className="px-3 py-3 text-sm text-muted-foreground">正在加载账号信息...</p>}
               {!loading && handles.map((handle) => {
                 const key = String(handle).toLowerCase().replace(/^@/, "");
                 const prof = (profiles || {})[key] || (profiles || {})[`@${key}`] || {};
+                const lastPostText = prof.lastPostAt ? new Date(prof.lastPostAt).toLocaleString("zh-CN") : "—";
                 return (
-                  <div key={handle} className="grid grid-cols-[minmax(180px,1.2fr)_minmax(120px,0.8fr)_minmax(160px,1fr)] items-center gap-3 border-b px-3 py-3 last:border-b-0">
+                  <div key={handle} className="grid gap-2 border-b px-3 py-3 last:border-b-0 sm:grid-cols-[minmax(180px,1.2fr)_minmax(120px,0.8fr)_minmax(160px,1fr)] sm:items-center sm:gap-3">
                     <div className="flex min-w-0 items-center gap-3">
                       {prof.avatar ? (
                         <img src={prof.avatar} alt={handle} className="size-10 shrink-0 rounded-full object-cover" />
@@ -521,12 +522,13 @@ function AccountsDialog({ open, onClose, source }) {
                         <p className="truncate text-xs text-muted-foreground">@{String(handle).replace(/^@/, "")}</p>
                       </div>
                     </div>
-                    <span className={cn("text-sm", prof.avatar ? "text-success" : "text-warning-foreground")}>
-                      {prof.avatar ? "已保存" : "待获取"}
-                    </span>
-                    <span className="text-sm text-muted-foreground">
-                      {prof.lastPostAt ? new Date(prof.lastPostAt).toLocaleString("zh-CN") : "—"}
-                    </span>
+                    <div className="flex items-center justify-between gap-3 pl-13 sm:block sm:pl-0">
+                      <span className={cn("text-sm", prof.avatar ? "text-success" : "text-warning-foreground")}>
+                        {prof.avatar ? "已保存" : "待获取"}
+                      </span>
+                      <span className="text-right text-xs text-muted-foreground sm:hidden">{lastPostText}</span>
+                    </div>
+                    <span className="hidden text-sm text-muted-foreground sm:block">{lastPostText}</span>
                   </div>
                 );
               })}
