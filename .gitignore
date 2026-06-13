@@ -1,0 +1,27 @@
+.DS_Store
+__pycache__/
+*.py[cod]
+.venv/
+node_modules/
+
+# env / secrets — never commit
+.env
+.env.*
+!.env.example
+web/.env
+web/.env.*
+!web/.env.example
+
+# build output
+dist/
+web/dist/
+
+# local runtime data + scratch artifacts (may contain scraped data / secrets)
+data/inbox/*.json
+data/runs/
+data/sources/
+output/
+.playwright-cli/
+
+# vercel
+.vercel

@@ -1,0 +1,12 @@
+handle,category,priority,notes
+openai,ai_tools,1,AI platform signals
+GoogleDeepMind,ai_tools,1,AI research and product shifts
+AnthropicAI,ai_tools,1,AI product and safety signals
+levelsio,indie_dev,1,independent developer business cases
+dhh,saas,2,SaaS and bootstrapping opinions
+Jason,ai_startup,2,startup and AI investing cases
+sama,ai_startup,2,AI industry signals
+stripe,saas,2,B2B SaaS and payments product signals
+a16z,venture,3,startup market commentary
+ycombinator,startup,2,founder cases
+

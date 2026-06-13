@@ -1,0 +1,10 @@
+[project]
+name = "x-content-ops"
+version = "0.1.0"
+description = "X account monitoring, GPT filtering, and Chinese multi-platform content generation pipeline."
+requires-python = ">=3.9"
+dependencies = []
+
+[tool.setuptools]
+packages = ["content_ops"]
+

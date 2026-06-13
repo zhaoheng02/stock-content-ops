@@ -1,0 +1,36 @@
+[
+  {
+    "id": "sample-1",
+    "account": "ai_founder",
+    "text": "We reduced AI agent onboarding churn by 38% after replacing the demo flow with a usage-based trial and published the exact funnel.",
+    "url": "https://x.example/sample-1",
+    "metrics": {
+      "likes": 420,
+      "reposts": 88,
+      "replies": 31
+    }
+  },
+  {
+    "id": "sample-2",
+    "account": "saas_operator",
+    "text": "A B2B SaaS founder shared a pricing teardown: annual plans grew when onboarding switched from feature tours to ROI benchmarks.",
+    "url": "https://x.example/sample-2",
+    "metrics": {
+      "likes": 260,
+      "reposts": 54,
+      "replies": 20
+    }
+  },
+  {
+    "id": "sample-3",
+    "account": "random_fun",
+    "text": "Just had coffee and watched a movie.",
+    "url": "https://x.example/sample-3",
+    "metrics": {
+      "likes": 3,
+      "reposts": 0,
+      "replies": 0
+    }
+  }
+]
+

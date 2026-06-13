@@ -1,0 +1,20 @@
+{
+  "sources": [
+    {
+      "id": "x",
+      "name": "X / Twitter",
+      "platform": "x",
+      "cadence_minutes": 30,
+      "targets": [
+        "ArtofSpecuycky",
+        "hanking66",
+        "xiaomustock"
+      ],
+      "min_score": 70,
+      "material_strategy": "download_media",
+      "credential_key": "X_BEARER_TOKEN",
+      "credential_file": "/Users/bytedance/personal.config",
+      "enabled": true
+    }
+  ]
+}

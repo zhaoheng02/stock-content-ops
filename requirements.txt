@@ -1,0 +1,2 @@
+# content_ops uses only the Python standard library.
+# This file marks the api/ directory as a Python runtime for Vercel.
