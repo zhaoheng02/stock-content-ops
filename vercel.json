@@ -1,5 +1,12 @@
 {
   "buildCommand": "bash build.sh",
   "outputDirectory": "web/dist",
-  "installCommand": "echo skip-root-install"
+  "installCommand": "echo skip-root-install",
+  "functions": {
+    "api/cron.py": { "maxDuration": 300 },
+    "api/source-runs.py": { "maxDuration": 300 }
+  },
+  "crons": [
+    { "path": "/api/cron", "schedule": "0 * * * *" }
+  ]
 }

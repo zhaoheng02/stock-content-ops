@@ -51,12 +51,15 @@ class DataSourceApi:
                 payload = json.loads(body.decode("utf-8") or "{}")
                 run = self.service.run_source(
                     str(payload.get("source_id", "")),
-                    output_dir=str(payload.get("out", "data/inbox")),
+                    output_dir=str(payload.get("out", "/tmp/inbox")),
                 )
                 return _json_response(201, {"run": run.__dict__})
             if method == "POST" and parsed.path == "/api/generate":
                 payload = json.loads(body.decode("utf-8") or "{}")
                 return _json_response(200, {"drafts": self._generate_drafts(payload)})
+            if (method in ("GET", "POST")) and parsed.path == "/api/cron":
+                results = self.service.run_due_sources(output_dir="/tmp/inbox")
+                return _json_response(200, {"ran": results, "count": len(results)})
 
             studio_response = self._handle_studio(method, parsed.path, query, body)
             if studio_response is not None:

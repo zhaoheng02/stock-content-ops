@@ -358,18 +358,32 @@ class DataSourceService:
             elif collector is not None:
                 posts = list(collector(source))
             else:
-                token = CredentialFile(source.credential_file).get(source.credential_key)
-                provider = XApiPostProvider(
-                    handles=source.targets,
-                    bearer_token=token,
-                    transport=transport,
-                )
-                posts = list(provider.fetch_posts())
+                # Default production path: collect via the Airtap cloud phone.
+                from .airtap_client import build_x_collection_prompt, collect_via_airtap
+                from .x_ingest import normalize_airtap_payload
+
+                prompt = build_x_collection_prompt(source.targets, posts_per_account=3)
+                payload = collect_via_airtap(prompt)
+                records = normalize_airtap_payload(payload, source_id=source_id, run_id=run_id)
+                posts = [
+                    SourcePost(
+                        id=record.get("post_id") or record["content_hash"],
+                        account=record.get("author_handle", ""),
+                        text=record.get("text", ""),
+                        url=record.get("url") or "",
+                        metrics=record.get("metrics") or {},
+                    )
+                    for record in records
+                ]
             items_collected = len(posts)
-            output_path = write_posts_json(
-                posts,
-                str(Path(output_dir) / f"{source.id}-{_compact_timestamp(started_at)}.json"),
-            )
+            try:
+                output_path = write_posts_json(
+                    posts,
+                    str(Path(output_dir) / f"{source.id}-{_compact_timestamp(started_at)}.json"),
+                )
+            except OSError:
+                # Read-only filesystem (e.g. Vercel). Supabase is the real store.
+                output_path = ""
             if records and hasattr(self.repository, "upsert_posts"):
                 for record in records:
                     record["source_id"] = source_id
@@ -396,6 +410,40 @@ class DataSourceService:
             raise RuntimeError(message)
 
         return run
+
+    def list_due_sources(self, output_dir: str = "data/inbox") -> List[DataSourceConfig]:
+        """Return enabled sources whose cadence has elapsed since the last run."""
+        now = self.now()
+        due = []
+        for source in self.repository.list_sources():
+            if not source.enabled or source.platform != "x":
+                continue
+            runs = self.repository.list_runs(source_id=source.id, limit=1)
+            if not runs:
+                due.append(source)
+                continue
+            last = runs[0]
+            try:
+                last_at = datetime.fromisoformat(last.started_at)
+            except ValueError:
+                due.append(source)
+                continue
+            if last_at.tzinfo is None:
+                last_at = last_at.replace(tzinfo=timezone.utc)
+            elapsed_minutes = (now - last_at).total_seconds() / 60.0
+            if elapsed_minutes >= source.cadence_minutes:
+                due.append(source)
+        return due
+
+    def run_due_sources(self, output_dir: str = "data/inbox") -> List[dict]:
+        results = []
+        for source in self.list_due_sources(output_dir=output_dir):
+            try:
+                run = self.run_source(source.id, output_dir=output_dir)
+                results.append({"source_id": source.id, "status": run.status, "items": run.items_collected})
+            except Exception as error:
+                results.append({"source_id": source.id, "status": "failed", "error": str(error)})
+        return results
 
 
 def parse_account_targets(text: str) -> Tuple[str, ...]:
@@ -447,8 +495,8 @@ def _normalize_source(source: DataSourceConfig) -> DataSourceConfig:
         raise ValueError("data source name is required")
     if platform not in SUPPORTED_PLATFORMS:
         raise ValueError(f"unsupported data source platform: {platform}")
-    if source.cadence_minutes < 5:
-        raise ValueError("cadence_minutes must be at least 5")
+    if source.cadence_minutes < 30 or source.cadence_minutes > 1440:
+        raise ValueError("cadence_minutes must be between 30 and 1440 (24h)")
     if source.min_score < 0 or source.min_score > 100:
         raise ValueError("min_score must be 0-100")
     if not targets:
