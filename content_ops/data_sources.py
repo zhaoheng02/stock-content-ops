@@ -361,7 +361,7 @@ class SupabaseDataSourceRepository:
         if not rows:
             return
         self.transport.request_json(
-            "POST", "monitored_accounts", payload=[_normalize_account_row(row) for row in rows],
+            "POST", "monitored_accounts", payload=[_monitored_account_to_supabase(row) for row in rows],
             query="on_conflict=source_id,handle",
         )
 
@@ -1001,6 +1001,21 @@ def _post_to_supabase(record: dict) -> dict:
         "raw",
     }
     return {key: value for key, value in record.items() if key in allowed and value is not None}
+
+
+def _monitored_account_to_supabase(row: dict) -> dict:
+    normalized = _normalize_account_row(row)
+    allowed = [
+        "source_id",
+        "handle",
+        "author_name",
+        "avatar_url",
+        "bio",
+        "profile_url",
+        "last_post_at",
+        "onboarded_at",
+    ]
+    return {key: normalized.get(key) for key in allowed}
 
 
 def _quote_value(value: str) -> str:

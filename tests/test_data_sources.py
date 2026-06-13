@@ -309,6 +309,20 @@ class DataSourceServiceTest(unittest.TestCase):
         self.assertEqual(transport.accounts[0]["handle"], "hanking66")
         self.assertEqual(transport.accounts[0]["last_post_at"], "2026-06-12T22:52:00+08:00")
 
+    def test_supabase_repository_sends_uniform_monitored_account_payload_keys(self):
+        transport = FakeSupabaseTransport()
+        repo = SupabaseDataSourceRepository(transport)
+
+        repo.upsert_monitored_accounts([
+            {"source_id": "x", "handle": "with_avatar", "avatar_url": "https://pbs.twimg.com/profile_images/a.jpg"},
+            {"source_id": "x", "handle": "new_one"},
+        ])
+
+        payload = transport.requests[-1][2]
+        self.assertEqual(set(payload[0].keys()), set(payload[1].keys()))
+        self.assertIn("avatar_url", payload[1])
+        self.assertIsNone(payload[1]["avatar_url"])
+
     def test_supabase_repository_can_read_connection_from_credential_file(self):
         original_url = os.environ.pop("SUPABASE_URL", None)
         original_key = os.environ.pop("SUPABASE_SERVICE_ROLE_KEY", None)
