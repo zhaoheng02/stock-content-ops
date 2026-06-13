@@ -21,7 +21,7 @@ import {
 } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { platformCards } from "@/data/mock";
-import { API_BASE } from "@/lib/api";
+import { API_BASE, api } from "@/lib/api";
 
 function Field({ label, children, full }) {
   return (
@@ -56,6 +56,7 @@ const TITLES = {
   accountAuth: "添加发布账号",
   asset: "上传素材",
   proxy: "添加代理",
+  member: "邀请成员",
   dataPush: "数据推送",
   approval: "发布确认",
 };
@@ -80,6 +81,7 @@ export function ModalRouter({ modal, onClose, onToast }) {
         {modal === "accountAuth" && <AccountAuthBody onConfirm={confirm} onClose={onClose} />}
         {modal === "asset" && <AssetBody onConfirm={confirm} onClose={onClose} />}
         {modal === "proxy" && <ProxyBody onConfirm={confirm} onClose={onClose} />}
+        {modal === "member" && <MemberBody onConfirm={confirm} onClose={onClose} />}
         {modal === "dataPush" && <DataPushBody onConfirm={confirm} onClose={onClose} />}
         {modal === "approval" && <ApprovalBody onConfirm={confirm} onClose={onClose} />}
       </DialogContent>
@@ -261,63 +263,196 @@ function DraftPreviewBody({ onConfirm, onClose }) {
   );
 }
 
+const PLATFORM_SLUG = {
+  "小红书": "xiaohongshu",
+  "公众号": "wechat",
+  "视频号": "wechat",
+  "抖音": "tiktok",
+  "快手": "kuaishou",
+  "B站": "bilibili",
+};
+
 function AccountAuthBody({ onConfirm, onClose }) {
+  const [platform, setPlatform] = useState("");
+  const [name, setName] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const save = async () => {
+    setSaving(true);
+    setError("");
+    try {
+      const account = await api.post("/api/accounts", {
+        platform,
+        slug: PLATFORM_SLUG[platform] || "",
+        name: name || `${platform}账号`,
+        status: "已授权",
+        mode: "浏览器发布",
+      });
+      window.dispatchEvent(new CustomEvent("accounts:changed", { detail: account }));
+      onConfirm("账号已添加");
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSaving(false);
+    }
+  };
   return (
     <>
       <div className="grid grid-cols-3 gap-2">
         {["小红书", "公众号", "视频号", "抖音", "快手", "B站"].map((p) => (
           <button
             key={p}
-            className="rounded-lg border bg-card py-2.5 text-sm font-medium transition-colors hover:border-primary hover:text-primary"
+            onClick={() => setPlatform(p)}
+            className={
+              "rounded-lg border py-2.5 text-sm font-medium transition-colors " +
+              (platform === p ? "border-primary bg-primary/5 text-primary" : "bg-card hover:border-primary hover:text-primary")
+            }
           >
             {p}
           </button>
         ))}
       </div>
+      <Field label="账号名称">
+        <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="如：科技观察员" />
+      </Field>
       <div className="flex items-center gap-2 rounded-lg bg-muted px-3 py-2.5 text-sm text-muted-foreground">
         <KeyRound className="size-4 shrink-0" />
-        <span>选择平台后会打开对应授权页，登录完成后保存账号会话。</span>
+        <span>保存后账号会进入已授权列表；真实平台登录会话在发布时按需建立。</span>
       </div>
+      {error && <p className="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">{error}</p>}
       <DialogFooter>
         <Button variant="outline" onClick={onClose}>取消</Button>
-        <Button onClick={() => onConfirm("正在打开授权页")}>打开授权</Button>
+        <Button onClick={save} disabled={saving || !platform}>
+          {saving && <Loader2 className="mr-1.5 size-4 animate-spin" />}保存账号
+        </Button>
       </DialogFooter>
     </>
   );
 }
 
 function AssetBody({ onConfirm, onClose }) {
+  const [form, setForm] = useState({ name: "", type: "图片", group_name: "未分组", size_bytes: 0 });
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const onFile = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const type = file.type.startsWith("video") ? "视频" : file.type.startsWith("image") ? "图片" : "文章";
+    setForm((f) => ({ ...f, name: file.name, size_bytes: file.size, type }));
+  };
+  const save = async () => {
+    setSaving(true);
+    setError("");
+    try {
+      const asset = await api.post("/api/assets", form);
+      window.dispatchEvent(new CustomEvent("assets:changed", { detail: asset }));
+      onConfirm("素材已上传");
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSaving(false);
+    }
+  };
   return (
     <>
-      <Field label="分组">
-        <Picker placeholder="全部分组" options={["全部分组", "AI PC", "短视频素材"]} />
-      </Field>
-      <div className="flex flex-col items-center justify-center gap-2 rounded-xl border border-dashed bg-muted/40 py-10 text-center text-muted-foreground">
-        <Upload className="size-6" />
-        <span className="text-sm">点击上传图片、视频、DOCX 或字幕文件</span>
+      <div className="grid gap-4 sm:grid-cols-2">
+        <Field label="素材名称" full>
+          <Input value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} placeholder="ai-pc-cover.png" />
+        </Field>
+        <Field label="类型">
+          <Picker value={form.type} onValueChange={(type) => setForm((f) => ({ ...f, type }))} placeholder="图片" options={["图片", "视频", "文章"]} />
+        </Field>
+        <Field label="分组">
+          <Input value={form.group_name} onChange={(e) => setForm((f) => ({ ...f, group_name: e.target.value }))} placeholder="AI PC" />
+        </Field>
       </div>
+      <label className="flex cursor-pointer flex-col items-center justify-center gap-2 rounded-xl border border-dashed bg-muted/40 py-8 text-center text-muted-foreground hover:border-primary/50">
+        <Upload className="size-6" />
+        <span className="text-sm">{form.name ? `已选择：${form.name}` : "点击选择文件以自动填充名称、类型和大小"}</span>
+        <input type="file" className="hidden" onChange={onFile} />
+      </label>
+      {error && <p className="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">{error}</p>}
       <DialogFooter>
         <Button variant="outline" onClick={onClose}>取消</Button>
-        <Button onClick={() => onConfirm("素材已上传")}>上传</Button>
+        <Button onClick={save} disabled={saving || !form.name.trim()}>
+          {saving && <Loader2 className="mr-1.5 size-4 animate-spin" />}保存素材
+        </Button>
       </DialogFooter>
     </>
   );
 }
 
 function ProxyBody({ onConfirm, onClose }) {
+  const [form, setForm] = useState({ name: "", type: "HTTP", host: "", port: "", username: "", password: "" });
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const set = (key) => (e) => setForm((f) => ({ ...f, [key]: e.target.value }));
+  const save = async () => {
+    setSaving(true);
+    setError("");
+    try {
+      const proxy = await api.post("/api/proxies", { ...form, port: Number(form.port) || 0 });
+      window.dispatchEvent(new CustomEvent("proxies:changed", { detail: proxy }));
+      onConfirm("代理已添加");
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSaving(false);
+    }
+  };
   return (
     <>
       <div className="grid gap-4 sm:grid-cols-2">
-        <Field label="名称"><Input placeholder="美国-内容发布-1" /></Field>
-        <Field label="类型"><Picker placeholder="HTTP" options={["HTTP", "SOCKS5"]} /></Field>
-        <Field label="代理地址"><Input placeholder="proxy.example.com" /></Field>
-        <Field label="端口"><Input placeholder="8080" /></Field>
-        <Field label="账号"><Input /></Field>
-        <Field label="密码"><Input type="password" /></Field>
+        <Field label="名称"><Input value={form.name} onChange={set("name")} placeholder="美国-内容发布-1" /></Field>
+        <Field label="类型"><Picker value={form.type} onValueChange={(type) => setForm((f) => ({ ...f, type }))} placeholder="HTTP" options={["HTTP", "SOCKS5"]} /></Field>
+        <Field label="代理地址"><Input value={form.host} onChange={set("host")} placeholder="proxy.example.com" /></Field>
+        <Field label="端口"><Input value={form.port} onChange={set("port")} placeholder="8080" /></Field>
+        <Field label="账号"><Input value={form.username} onChange={set("username")} /></Field>
+        <Field label="密码"><Input type="password" value={form.password} onChange={set("password")} /></Field>
       </div>
+      {error && <p className="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">{error}</p>}
       <DialogFooter>
         <Button variant="outline" onClick={onClose}>取消</Button>
-        <Button onClick={() => onConfirm("代理已添加")}>添加</Button>
+        <Button onClick={save} disabled={saving || !form.name.trim()}>
+          {saving && <Loader2 className="mr-1.5 size-4 animate-spin" />}添加
+        </Button>
+      </DialogFooter>
+    </>
+  );
+}
+
+function MemberBody({ onConfirm, onClose }) {
+  const [form, setForm] = useState({ name: "", role: "编辑", account_count: 0 });
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const save = async () => {
+    setSaving(true);
+    setError("");
+    try {
+      const member = await api.post("/api/team", { ...form, account_count: Number(form.account_count) || 0, status: "在线" });
+      window.dispatchEvent(new CustomEvent("team:changed", { detail: member }));
+      onConfirm("成员已邀请");
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+  return (
+    <>
+      <div className="grid gap-4 sm:grid-cols-2">
+        <Field label="姓名" full><Input value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} placeholder="如：内容编辑" /></Field>
+        <Field label="角色">
+          <Picker value={form.role} onValueChange={(role) => setForm((f) => ({ ...f, role }))} placeholder="编辑" options={["编辑", "审核", "发布", "自动化", "管理员"]} />
+        </Field>
+        <Field label="运营账号数"><Input value={form.account_count} onChange={(e) => setForm((f) => ({ ...f, account_count: e.target.value }))} placeholder="0" /></Field>
+      </div>
+      {error && <p className="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">{error}</p>}
+      <DialogFooter>
+        <Button variant="outline" onClick={onClose}>取消</Button>
+        <Button onClick={save} disabled={saving || !form.name.trim()}>
+          {saving && <Loader2 className="mr-1.5 size-4 animate-spin" />}邀请
+        </Button>
       </DialogFooter>
     </>
   );
