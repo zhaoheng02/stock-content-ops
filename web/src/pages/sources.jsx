@@ -292,12 +292,18 @@ export function SourcesPage({ selectedSource, setSelectedSource }) {
               ) : (
                 <div className="overflow-hidden rounded-xl border">
                   {runs.map(runToRow).map((r, i) => (
-                    <div key={r.id} className={cn("flex items-center gap-4 px-4 py-3.5 text-sm transition-colors hover:bg-muted/40", i > 0 && "border-t")}>
-                      <span className={cn("size-2 shrink-0 rounded-full", r.pending ? "bg-warning animate-pulse" : r.ok ? "bg-success" : "bg-muted-foreground/50")} />
-                      <span className="w-36 shrink-0 font-medium text-foreground tnum">{r.time}</span>
-                      <span className="flex-1 text-foreground/90">{r.text}</span>
-                      <span className="shrink-0 text-muted-foreground tnum">耗时 {r.cost}</span>
-                      <Button variant="ghost" size="sm" className="shrink-0 text-primary" disabled={!r.run || r.pending} onClick={() => r.run && openLog(r.run)}>
+                    <div
+                      key={r.id}
+                      className={cn(
+                        "grid grid-cols-[12px_150px_minmax(0,1fr)_88px_84px] items-center gap-3 px-4 py-3.5 text-sm transition-colors hover:bg-muted/40",
+                        i > 0 && "border-t"
+                      )}
+                    >
+                      <span className={cn("size-2 rounded-full", r.pending ? "bg-warning animate-pulse" : r.ok ? "bg-success" : "bg-muted-foreground/50")} />
+                      <span className="font-medium text-foreground tnum">{r.time}</span>
+                      <span className="min-w-0 truncate text-foreground/90" title={r.text}>{r.text}</span>
+                      <span className="text-muted-foreground tnum">耗时 {r.cost}</span>
+                      <Button variant="ghost" size="sm" className="text-primary" disabled={!r.run || r.pending} onClick={() => r.run && openLog(r.run)}>
                         查看日志
                       </Button>
                     </div>

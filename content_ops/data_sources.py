@@ -476,11 +476,18 @@ class DataSourceService:
         saved = self.repository.save_source(normalized)
         # Reconcile monitored_accounts with the new target list.
         if hasattr(self.repository, "upsert_monitored_accounts"):
+            accounts_by_handle = {
+                str(row.get("handle", "")).lower(): row
+                for row in self.list_source_accounts(saved.id)
+            }
             current = {t.lower(): t for t in saved.targets}
             removed = [t for t in previous_targets if t not in current]
             if removed and hasattr(self.repository, "delete_monitored_accounts"):
                 self.repository.delete_monitored_accounts(saved.id, removed)
-            new_handles = [low for low in current if low not in previous_targets]
+            new_handles = [
+                low for low in current
+                if low not in previous_targets and not accounts_by_handle.get(low, {}).get("avatar_url")
+            ]
             # Seed rows for new handles so the popover shows them immediately.
             if new_handles:
                 self.repository.upsert_monitored_accounts([

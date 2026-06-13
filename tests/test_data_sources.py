@@ -227,6 +227,22 @@ class DataSourceServiceTest(unittest.TestCase):
             accounts = repo.list_monitored_accounts("x")
             self.assertEqual([row["handle"] for row in accounts], ["hanking66", "openai"])
 
+    def test_save_source_does_not_onboard_existing_avatar_accounts(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            repo = JsonDataSourceRepository(root / "sources.json", root / "runs.json")
+            service = DataSourceService(repo)
+            onboarded = []
+            service.start_onboarding = lambda source_id, handles: onboarded.extend(handles)
+            service.save_source(DataSourceConfig(id="x", name="X", platform="x", targets=("old",)))
+            repo.upsert_monitored_accounts([
+                {"source_id": "x", "handle": "with_avatar", "avatar_url": "https://pbs.twimg.com/profile_images/a.jpg"},
+            ])
+
+            service.save_source(DataSourceConfig(id="x", name="X", platform="x", targets=("old", "with_avatar", "new_one")))
+
+            self.assertEqual(onboarded, ["old", "new_one"])
+
     def test_parse_account_targets_accepts_comma_and_line_separated_handles(self):
         targets = parse_account_targets("@openai, @levelsio\nhttps://x.com/builder_a #ignored")
 
