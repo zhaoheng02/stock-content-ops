@@ -135,12 +135,12 @@ scripts/run_daily.sh 2026-06-08
 
 ## 前端 UI 原型
 
-当前 UI 原型在 `web/` 目录，先实现完整操作台界面和模拟交互，后续再接真实采集、生成、审批和发布 API。
+当前 UI 在 `web/` 目录。主页、数据源、线索池、创作、发布、账号、数据、审批、团队、素材十个页面均已接入真实后端（Supabase + serverless API），无 mock 数据。
 
 ```bash
 cd web
-npm install
-npm run dev -- --port 5174
+yarn install
+yarn dev --port 5174
 ```
 
 本地访问：
@@ -191,14 +191,14 @@ levelsio,indie_dev,1,independent developer business cases
 
 前端为 Vite 静态站点，后端 API 改为 Vercel Python serverless 函数（`api/*.py`），数据存储使用 Supabase。仓库已与 GitHub 连接，推送到 `main` 即自动部署。
 
-1. 在 Supabase SQL Editor 执行 `docs/supabase_schema.sql` 建表（含 `source_posts`）。
+1. 在 Supabase SQL Editor 执行 `docs/supabase_schema.sql` 建表（含 `source_posts`），再执行 `docs/supabase_schema_v2.sql`（drafts / publish_accounts / assets / team_members / proxies / publish_metrics）。
 2. 仓库导入 Vercel，框架预设选 “Other”。构建配置见 `vercel.json`：
    - Build Command: `bash build.sh`（用 `yarn install --frozen-lockfile` + `vite build`）
    - Output Directory: `web/dist`
 3. 在 Vercel 项目的 Environment Variables 配置：
    - `SUPABASE_URL`
    - `SUPABASE_SERVICE_ROLE_KEY`
-4. 部署后，前端通过同源 `/api/sources`、`/api/source-runs`、`/api/source-posts`、`/api/generate` 访问后端。
+4. 部署后，前端通过同源 API 访问后端：`/api/sources`、`/api/source-runs`、`/api/source-posts`、`/api/generate`（生成并落库草稿），以及 `/api/drafts`、`/api/accounts`、`/api/assets`、`/api/team`、`/api/proxies`、`/api/analytics`（支持 GET/POST/PATCH/DELETE）。
 
 构建踩坑记录（保持现状即可，勿回退）：
 
