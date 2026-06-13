@@ -38,6 +38,8 @@ def parse_publish_time(raw: Optional[str]) -> Optional[str]:
     if not raw:
         return None
     text = str(raw).strip()
+    if _looks_relative_time(text):
+        return None
 
     # Try ISO first.
     iso_candidate = text.replace("Z", "+00:00")
@@ -72,6 +74,14 @@ def parse_publish_time(raw: Optional[str]) -> Optional[str]:
             except ValueError:
                 continue
     return None
+
+
+def _looks_relative_time(text: str) -> bool:
+    lowered = text.strip().lower()
+    return bool(re.fullmatch(
+        r"(\d+\s*(s|sec|secs|second|seconds|m|min|mins|minute|minutes|h|hr|hrs|hour|hours|d|day|days|w|week|weeks|mo|month|months|y|yr|yrs|year|years)|\d+[smhdw])\s*(ago)?",
+        lowered,
+    ))
 
 
 def _avatar_for(handle: str, profiles: list) -> dict:
@@ -134,16 +144,25 @@ def _coerce_post(post: dict, handle: Optional[str], name: Optional[str]) -> dict
     }
 
 
-def normalize_airtap_payload(payload: dict, source_id: str = "x", run_id: str = "") -> List[dict]:
-    """Turn an Airtap result payload into storage-ready post records."""
+def normalize_airtap_payload(payload: dict, source_id: str = "x", run_id: str = "",
+                             profiles_by_handle: Optional[dict] = None) -> List[dict]:
+    """Turn an Airtap result payload into storage-ready post records.
+
+    Replies are excluded. Avatars/profile fields are backfilled from
+    profiles_by_handle (the one-time monitored_accounts profile data) since the
+    collection prompt no longer fetches avatars.
+    """
     payload = _coerce_flat_payload(payload)
     profiles = payload.get("profiles", []) or []
     posts = payload.get("posts", []) or []
     collected_at = payload.get("collected_at") or datetime.now(SHANGHAI_TZ).isoformat()
+    profiles_by_handle = profiles_by_handle or {}
 
     records: List[dict] = []
     seen_hashes = set()
     for post in posts:
+        if _is_reply(post):
+            continue
         handle = str(post.get("author_handle", "")).strip().lstrip("@")
         text = str(post.get("text", "") or "")
         post_id = str(post.get("id", "") or "")
@@ -153,10 +172,14 @@ def normalize_airtap_payload(payload: dict, source_id: str = "x", run_id: str = 
         seen_hashes.add(chash)
 
         prof = _avatar_for(handle, profiles)
+        stored = profiles_by_handle.get(handle.lower(), {})
         url = post.get("url") or (
             f"https://x.com/{handle}/status/{post_id}" if handle and post_id else None
         )
         published_raw = post.get("published_at")
+        published_at = parse_publish_time(published_raw)
+        if not published_at:
+            continue
         records.append({
             "content_hash": chash,
             "source_id": source_id,
@@ -164,12 +187,12 @@ def normalize_airtap_payload(payload: dict, source_id: str = "x", run_id: str = 
             "platform": "x",
             "post_id": post_id or None,
             "author_handle": handle,
-            "author_name": post.get("author_name") or prof.get("author_name"),
-            "author_avatar_url": prof.get("avatar_url"),
-            "author_bio": prof.get("bio"),
+            "author_name": post.get("author_name") or prof.get("author_name") or stored.get("author_name"),
+            "author_avatar_url": prof.get("avatar_url") or stored.get("avatar_url"),
+            "author_bio": prof.get("bio") or stored.get("bio"),
             "text": text,
             "url": url,
-            "published_at": parse_publish_time(published_raw),
+            "published_at": published_at,
             "published_at_raw": published_raw,
             "image_urls": post.get("image_urls", []) or [],
             "video_urls": post.get("video_urls", []) or [],
@@ -181,6 +204,35 @@ def normalize_airtap_payload(payload: dict, source_id: str = "x", run_id: str = 
             "raw": post,
         })
     return records
+
+
+def _is_reply(post: dict) -> bool:
+    if post.get("is_reply") is True:
+        return True
+    reply_to = post.get("reply_to")
+    if reply_to:
+        return True
+    # Heuristic: a leading "@handle" mention typically marks a reply.
+    text = str(post.get("text", "") or "").lstrip()
+    return text.startswith("@")
+
+
+def extract_profiles(payload: dict) -> List[dict]:
+    """Pull profile records out of an Airtap profile-lookup payload."""
+    payload = _coerce_flat_payload(payload)
+    out = []
+    for p in payload.get("profiles", []) or []:
+        handle = str(p.get("author_handle", "")).strip().lstrip("@")
+        if not handle:
+            continue
+        out.append({
+            "handle": handle,
+            "author_name": p.get("author_name"),
+            "avatar_url": p.get("avatar_url"),
+            "bio": p.get("bio"),
+            "profile_url": p.get("profile_url") or f"https://x.com/{handle}",
+        })
+    return out
 
 
 def extract_airtap_json(text: str) -> Optional[dict]:

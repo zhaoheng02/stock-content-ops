@@ -37,9 +37,17 @@ class DataSourceApi:
                 return _json_response(201, {"source": _public_source(source)})
             if method == "GET" and parsed.path == "/api/source-runs":
                 source_id = _first(query.get("source_id"))
-                limit = int(_first(query.get("limit")) or "10")
-                runs = [run.__dict__ for run in self.service.list_runs(source_id=source_id, limit=limit)]
-                return _json_response(200, {"runs": runs})
+                limit = int(_first(query.get("limit")) or "5")
+                offset = int(_first(query.get("offset")) or "0")
+                all_runs = [r for r in self.service.list_runs(source_id=source_id) if r.kind == "collect"]
+                page = all_runs[offset:offset + limit]
+                return _json_response(200, {"runs": [r.__dict__ for r in page], "total": len(all_runs)})
+            if method == "GET" and parsed.path == "/api/source-accounts":
+                source_id = _first(query.get("source_id"))
+                accounts = []
+                if hasattr(self.service.repository, "list_monitored_accounts") and source_id:
+                    accounts = self.service.repository.list_monitored_accounts(source_id)
+                return _json_response(200, {"accounts": accounts})
             if method == "GET" and parsed.path == "/api/source-posts":
                 source_id = _first(query.get("source_id"))
                 run_id = _first(query.get("run_id"))

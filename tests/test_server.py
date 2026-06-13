@@ -56,7 +56,7 @@ class ServerApiTest(unittest.TestCase):
             status, _, body = client.handle("GET", "/api/source-runs?source_id=x-growth-ai")
 
             self.assertEqual(status, 200)
-            self.assertEqual(json.loads(body), {"runs": []})
+            self.assertEqual(json.loads(body), {"runs": [], "total": 0})
 
     def test_run_source_api_returns_structured_errors(self):
         with tempfile.TemporaryDirectory() as tmpdir:

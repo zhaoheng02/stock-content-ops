@@ -42,6 +42,7 @@ class FakeSupabaseTransport:
         self.requests = []
         self.sources = []
         self.runs = []
+        self.accounts = []
 
     def request_json(self, method, path, payload=None, query=None):
         self.requests.append((method, path, payload, query))
@@ -64,6 +65,36 @@ class FakeSupabaseTransport:
         if path == "data_source_runs" and method == "POST":
             self.runs.append(dict(payload))
             return [payload]
+        if path == "monitored_accounts" and method == "GET":
+            rows = list(self.accounts)
+            if query and query.startswith("source_id=eq."):
+                source_id = query.split("source_id=eq.", 1)[1].split("&", 1)[0]
+                rows = [row for row in rows if row["source_id"] == source_id]
+            return rows
+        if path == "monitored_accounts" and method == "POST":
+            payload_rows = payload if isinstance(payload, list) else [payload]
+            for row in payload_rows:
+                self.accounts = [
+                    existing for existing in self.accounts
+                    if (existing["source_id"], existing["handle"]) != (row["source_id"], row["handle"])
+                ]
+                self.accounts.append(dict(row))
+            return payload_rows
+        if path == "monitored_accounts" and method == "PATCH":
+            source_id = query.split("source_id=eq.", 1)[1].split("&", 1)[0]
+            handle = query.split("handle=eq.", 1)[1].split("&", 1)[0]
+            for row in self.accounts:
+                if row["source_id"] == source_id and row["handle"] == handle:
+                    row.update(payload)
+            return []
+        if path == "monitored_accounts" and method == "DELETE":
+            source_id = query.split("source_id=eq.", 1)[1].split("&", 1)[0]
+            handle = query.split("handle=eq.", 1)[1].split("&", 1)[0]
+            self.accounts = [
+                row for row in self.accounts
+                if not (row["source_id"] == source_id and row["handle"] == handle)
+            ]
+            return []
         raise AssertionError((method, path, payload, query))
 
 
@@ -183,6 +214,19 @@ class DataSourceServiceTest(unittest.TestCase):
             payload = json.loads(Path(run.output_path).read_text(encoding="utf-8"))
             self.assertEqual([item["account"] for item in payload], ["levelsio", "lennysan"])
 
+    def test_save_source_seeds_only_new_monitored_accounts(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            repo = JsonDataSourceRepository(root / "sources.json", root / "runs.json")
+            service = DataSourceService(repo)
+            service.start_onboarding = lambda source_id, handles: None
+
+            service.save_source(DataSourceConfig(id="x", name="X", platform="x", targets=("HanKing66", "levelsio")))
+            service.save_source(DataSourceConfig(id="x", name="X", platform="x", targets=("hanking66", "openai")))
+
+            accounts = repo.list_monitored_accounts("x")
+            self.assertEqual([row["handle"] for row in accounts], ["hanking66", "openai"])
+
     def test_parse_account_targets_accepts_comma_and_line_separated_handles(self):
         targets = parse_account_targets("@openai, @levelsio\nhttps://x.com/builder_a #ignored")
 
@@ -238,6 +282,16 @@ class DataSourceServiceTest(unittest.TestCase):
         self.assertEqual(repo.list_runs("x")[0].id, "run-1")
         self.assertEqual(transport.requests[0][0], "POST")
         self.assertEqual(transport.requests[0][3], "on_conflict=id")
+
+    def test_supabase_repository_normalizes_monitored_account_handles(self):
+        transport = FakeSupabaseTransport()
+        repo = SupabaseDataSourceRepository(transport)
+
+        repo.upsert_monitored_accounts([{"source_id": "x", "handle": "@HanKing66"}])
+        repo.patch_monitored_account("x", "HanKing66", {"last_post_at": "2026-06-12T22:52:00+08:00"})
+
+        self.assertEqual(transport.accounts[0]["handle"], "hanking66")
+        self.assertEqual(transport.accounts[0]["last_post_at"], "2026-06-12T22:52:00+08:00")
 
     def test_supabase_repository_can_read_connection_from_credential_file(self):
         original_url = os.environ.pop("SUPABASE_URL", None)

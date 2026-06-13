@@ -118,47 +118,89 @@ def latest_agent_text(details: dict) -> str:
     return ""
 
 
-def build_x_collection_prompt(handles, posts_per_account: int = 3) -> str:
-    """Build the X collection task prompt for a set of handles."""
+def build_x_profile_prompt(handles) -> str:
+    """One-time prompt: fetch each account's profile name, avatar URL and bio.
+
+    Run once when accounts are added; post collection never re-fetches avatars.
+    """
     handles = [str(h).lstrip("@").strip() for h in handles if str(h).strip()]
-    bullet_handles = "\n".join(f"- {h}" for h in handles)
-    search_urls = "\n".join(
-        f"- https://x.com/search?q=from%3A{h}&src=typed_query&f=live" for h in handles
-    )
-    total = len(handles) * posts_per_account
-    return f"""Cold-start X (Twitter) data collection task. Use the Airtap cloud phone. Log in to X if needed using the X/Twitter app or x.com already set up on this cloud phone. Do not ask the human to log in unless X shows a hard login/verification wall you cannot pass.
+    bullet = "\n".join(f"- {h}" for h in handles)
+    return f"""Profile lookup task on the Airtap cloud phone. For each X (Twitter) account below, open its profile page https://x.com/<handle> and read its display name, avatar image URL (a https://pbs.twimg.com/profile_images/... URL), and bio.
 
-Goal: collect the latest {posts_per_account} posts from EACH of these {len(handles)} accounts ({total} posts total on a full run):
-{bullet_handles}
+Accounts:
+{bullet}
 
-For each account, open this live search URL directly and read the most recent original posts (newest first):
-{search_urls}
+Do NOT collect posts. Only profile metadata.
 
-Take the {posts_per_account} most recent posts per account regardless of date. Skip pure retweets and pinned ads if obvious, but keep normal posts and quote-posts.
-
-For EVERY post, extract raw data only. Do NOT translate, rewrite, summarize, shorten, or infer the post body. Output exact values you can see.
-
-Also capture each account's PROFILE/AVATAR image: open the account profile (https://x.com/<handle>) and read the avatar image URL (a https://pbs.twimg.com/profile_images/... URL). Include the account display name and bio if visible.
-
-Return the final result as ONE JSON object in your final message, using exactly these snake_case keys:
+Return ONE JSON object in your final message using exactly these snake_case keys:
 
 {{
   "collected_at": "<ISO 8601 time in Asia/Shanghai>",
   "profiles": [
     {{"author_handle": "<handle>", "author_name": "<display name>", "avatar_url": "https://pbs.twimg.com/profile_images/....jpg", "bio": "<bio or empty>", "profile_url": "https://x.com/<handle>"}}
-  ],
-  "posts": [
-    {{"id": "<tweet id digits>", "author_name": "<display name>", "author_handle": "<handle>", "published_at": "<exact post time as shown, plus absolute form if visible>", "text": "<full exact post body, no edits>", "url": "https://x.com/<handle>/status/<id>", "image_urls": ["https://pbs.twimg.com/media/....jpg"], "video_urls": [], "link_cards": [], "quote": null, "metrics": {{"likes": null, "reposts": null, "replies": null, "views": null}}}}
   ]
 }}
 
 Rules:
+- One profile object per account, in the same order.
+- avatar_url must be a direct https://pbs.twimg.com/profile_images/... URL.
+- Do NOT post the JSON anywhere; just return it in your final message.
+- Never expose any token or secret."""
+
+
+def build_x_collection_prompt(handles, posts_per_account: int = 3, since_by_handle=None) -> str:
+    """Build the X collection task prompt.
+
+    Two modes per account:
+    - Cold start (handle not in since_by_handle): take the latest
+      `posts_per_account` ORIGINAL posts.
+    - Incremental (handle has a `since` timestamp): take every ORIGINAL post
+      strictly newer than that time (could be many, could be zero).
+
+    Replies are always excluded. Avatars are NOT fetched here.
+    """
+    handles = [str(h).lstrip("@").strip() for h in handles if str(h).strip()]
+    since_by_handle = since_by_handle or {}
+    lines = []
+    search_urls = []
+    for h in handles:
+        since = since_by_handle.get(h) or since_by_handle.get(h.lower())
+        if since:
+            lines.append(f"- {h}: collect every ORIGINAL post published strictly after {since} (newest first). If none are newer, return none for this account.")
+        else:
+            lines.append(f"- {h}: cold start — collect the latest {posts_per_account} ORIGINAL posts (newest first).")
+        search_urls.append(f"- https://x.com/search?q=from%3A{h}&src=typed_query&f=live")
+    per_account = "\n".join(lines)
+    urls = "\n".join(search_urls)
+    return f"""X (Twitter) data collection task on the Airtap cloud phone. Log in to X if needed using the app/x.com already set up on this cloud phone. Do not ask the human to log in unless X shows a hard login wall you cannot pass.
+
+Per-account instructions:
+{per_account}
+
+For each account, open this live search URL directly (newest first):
+{urls}
+
+IMPORTANT — only collect ORIGINAL posts the account itself published. EXCLUDE replies, EXCLUDE pure retweets, EXCLUDE pinned ads. Quote-posts authored by the account are allowed. A reply is any post that starts with "@someone" replying in a thread, or that X shows as "Replying to ...". Skip those.
+
+For EVERY collected post, extract raw data only. Do NOT translate, rewrite, summarize, shorten, or infer the post body. Output exact values you can see. Do NOT fetch profile avatars here.
+
+Return ONE JSON object in your final message using exactly these snake_case keys:
+
+{{
+  "collected_at": "<ISO 8601 time in Asia/Shanghai>",
+  "posts": [
+    {{"id": "<tweet id digits>", "author_handle": "<handle>", "author_name": "<display name>", "published_at": "<absolute time, ISO 8601 with timezone if possible, e.g. 2026-06-12T22:52:00+08:00>", "text": "<full exact post body, no edits>", "url": "https://x.com/<handle>/status/<id>", "image_urls": [], "video_urls": [], "link_cards": [], "quote": null, "metrics": {{"likes": null, "reposts": null, "replies": null, "views": null}}, "is_reply": false}}
+  ]
+}}
+
+Rules:
+- published_at MUST be an absolute timestamp (date + time), never a relative form like "5h" or "2 days ago". Open the post permalink/hover to get the absolute time if needed. Include timezone.
 - If id and handle are visible, set url to https://x.com/<handle>/status/<id>.
-- published_at: record the exact human-visible time shown on the post.
-- If a post visibly has media, image_urls/video_urls must not be silently empty; use direct https://pbs.twimg.com/media/... URLs. If you truly cannot get a real media URL, add a "media_error" field on that post.
-- metrics: fill what you can read; use null for any you cannot see.
-- Do NOT post the JSON to any backend or external API. Just return the JSON in your final message.
-- Never expose any token or secret in your report.
+- If a post has media, image_urls/video_urls must not be silently empty; use direct https://pbs.twimg.com/media/... URLs. If you truly cannot, add a "media_error" field on that post.
+- metrics: fill what you can read; use null otherwise.
+- Set is_reply:true only if you mistakenly included a reply; prefer to exclude replies entirely.
+- Do NOT post the JSON anywhere; just return it in your final message.
+- Never expose any token or secret.
 
 If X shows a hard login wall, captcha, or verification you cannot pass, STOP and report exactly what blocked you and on which account."""
 

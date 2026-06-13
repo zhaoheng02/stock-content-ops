@@ -36,6 +36,9 @@ class PublishTimeTests(unittest.TestCase):
     def test_unparseable_returns_none(self):
         self.assertIsNone(parse_publish_time("just now"))
 
+    def test_relative_time_returns_none(self):
+        self.assertIsNone(parse_publish_time("5h"))
+
 
 class NormalizeTests(unittest.TestCase):
     def test_normalize_and_dedupe(self):
@@ -62,6 +65,36 @@ class NormalizeTests(unittest.TestCase):
         text = "Here is the result:\n```json\n{\"posts\": [], \"profiles\": []}\n```\nDone."
         data = extract_airtap_json(text)
         self.assertEqual(data, {"posts": [], "profiles": []})
+
+    def test_skips_replies_and_relative_times(self):
+        payload = {
+            "posts": [
+                {"id": "1", "author_handle": "hanking66", "text": "@someone reply", "published_at": "2026-06-12T22:52:00+08:00"},
+                {"id": "2", "author_handle": "hanking66", "text": "relative only", "published_at": "5h"},
+                {"id": "3", "author_handle": "hanking66", "text": "original", "published_at": "2026-06-12T23:52:00+08:00"},
+            ],
+        }
+
+        records = normalize_airtap_payload(payload, source_id="x", run_id="run1")
+
+        self.assertEqual([r["post_id"] for r in records], ["3"])
+
+    def test_uses_stored_profile_without_collection_profiles(self):
+        payload = {
+            "posts": [
+                {"id": "1", "author_handle": "HanKing66", "author_name": "", "text": "original", "published_at": "2026-06-12T22:52:00+08:00"},
+            ],
+        }
+
+        records = normalize_airtap_payload(
+            payload,
+            source_id="x",
+            run_id="run1",
+            profiles_by_handle={"hanking66": {"author_name": "Han", "avatar_url": "https://pbs.twimg.com/profile_images/a.jpg"}},
+        )
+
+        self.assertEqual(records[0]["author_name"], "Han")
+        self.assertEqual(records[0]["author_avatar_url"], "https://pbs.twimg.com/profile_images/a.jpg")
 
 
 if __name__ == "__main__":

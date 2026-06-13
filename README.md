@@ -191,14 +191,14 @@ levelsio,indie_dev,1,independent developer business cases
 
 前端为 Vite 静态站点，后端 API 改为 Vercel Python serverless 函数（`api/*.py`），数据存储使用 Supabase。仓库已与 GitHub 连接，推送到 `main` 即自动部署。
 
-1. 在 Supabase SQL Editor 执行 `docs/supabase_schema.sql` 建表（含 `source_posts`），再执行 `docs/supabase_schema_v2.sql`（drafts / publish_accounts / assets / team_members / proxies / publish_metrics）。
+1. 在 Supabase SQL Editor 执行 `docs/supabase_schema.sql` 建表（含 `source_posts`），再按顺序执行 `docs/supabase_schema_v2.sql`（drafts / publish_accounts / assets / team_members / proxies / publish_metrics）、`docs/supabase_schema_v3.sql`（异步 Airtap 运行状态）、`docs/supabase_schema_v4.sql`（监控账号头像与增量水位）。
 2. 仓库导入 Vercel，框架预设选 “Other”。构建配置见 `vercel.json`：
    - Build Command: `bash build.sh`（用 `yarn install --frozen-lockfile` + `vite build`）
    - Output Directory: `web/dist`
 3. 在 Vercel 项目的 Environment Variables 配置：
    - `SUPABASE_URL`
    - `SUPABASE_SERVICE_ROLE_KEY`
-4. 部署后，前端通过同源 API 访问后端：`/api/sources`、`/api/source-runs`、`/api/source-posts`、`/api/generate`（生成并落库草稿），以及 `/api/drafts`、`/api/accounts`、`/api/assets`、`/api/team`、`/api/proxies`、`/api/analytics`（支持 GET/POST/PATCH/DELETE）。
+4. 部署后，前端通过同源 API 访问后端：`/api/sources`、`/api/source-runs`、`/api/source-accounts`、`/api/source-posts`、`/api/generate`（生成并落库草稿），以及 `/api/drafts`、`/api/accounts`、`/api/assets`、`/api/team`、`/api/proxies`、`/api/analytics`（支持 GET/POST/PATCH/DELETE）。
 
 构建踩坑记录（保持现状即可，勿回退）：
 

@@ -26,7 +26,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { PageHeader } from "@/components/app/page-header";
 import { StatusBadge } from "@/components/app/status-badge";
 import { BrandIcon } from "@/components/app/brand-icon";
 import { cn } from "@/lib/utils";
@@ -61,6 +60,9 @@ export function SourcesPage({ selectedSource, setSelectedSource }) {
   const [logLoading, setLogLoading] = useState(false);
   const [configOpen, setConfigOpen] = useState(false);
   const [accountsOpen, setAccountsOpen] = useState(false);
+  const [runPage, setRunPage] = useState(0);
+  const [runTotal, setRunTotal] = useState(0);
+  const runPageSize = 5;
 
   const sources = useMemo(() => {
     const remoteRows = remoteSources.map(sourceToRow);
@@ -110,15 +112,28 @@ export function SourcesPage({ selectedSource, setSelectedSource }) {
   useEffect(() => {
     if (!remoteSources.length || !current?.id || isPlaceholder) {
       setRuns([]);
+      setRunTotal(0);
       return;
     }
     let active = true;
-    fetch(`${API_BASE}/api/source-runs?source_id=${encodeURIComponent(current.id)}&limit=8`)
+    fetch(`${API_BASE}/api/source-runs?source_id=${encodeURIComponent(current.id)}&limit=${runPageSize}&offset=${runPage * runPageSize}`)
       .then((r) => r.json())
-      .then((p) => active && setRuns(p.runs || []))
-      .catch(() => active && setRuns([]));
+      .then((p) => {
+        if (!active) return;
+        setRuns(p.runs || []);
+        setRunTotal(Number(p.total || 0));
+      })
+      .catch(() => {
+        if (!active) return;
+        setRuns([]);
+        setRunTotal(0);
+      });
     return () => { active = false; };
-  }, [current?.id, remoteSources.length, isPlaceholder]);
+  }, [current?.id, remoteSources.length, isPlaceholder, runPage]);
+
+  useEffect(() => {
+    setRunPage(0);
+  }, [current?.id]);
 
   const runNow = async () => {
     if (!currentRemote) return;
@@ -126,7 +141,9 @@ export function SourcesPage({ selectedSource, setSelectedSource }) {
     setApiError("");
     try {
       const payload = await api.post("/api/source-runs", { source_id: current.id });
+      setRunPage(0);
       setRuns((items) => [payload.run, ...items]);
+      setRunTotal((total) => total + 1);
     } catch (error) {
       setApiError(error.message);
     } finally {
@@ -143,8 +160,11 @@ export function SourcesPage({ selectedSource, setSelectedSource }) {
     const tick = async () => {
       try {
         await api.get("/api/cron");
-        const payload = await api.get(`/api/source-runs?source_id=${encodeURIComponent(current.id)}&limit=8`);
-        if (active) setRuns(payload.runs || []);
+        const payload = await api.get(`/api/source-runs?source_id=${encodeURIComponent(current.id)}&limit=${runPageSize}&offset=${runPage * runPageSize}`);
+        if (active) {
+          setRuns(payload.runs || []);
+          setRunTotal(Number(payload.total || 0));
+        }
       } catch {
         /* keep polling */
       }
@@ -152,7 +172,9 @@ export function SourcesPage({ selectedSource, setSelectedSource }) {
     const timer = setInterval(tick, 12000);
     tick();
     return () => { active = false; clearInterval(timer); };
-  }, [hasPending, current?.id, isPlaceholder]);
+  }, [hasPending, current?.id, isPlaceholder, runPage]);
+
+  const pageCount = Math.max(1, Math.ceil(runTotal / runPageSize));
 
   const openLog = async (run) => {
     if (!run?.id) return;
@@ -171,16 +193,15 @@ export function SourcesPage({ selectedSource, setSelectedSource }) {
 
   return (
     <div className="space-y-6">
-      <PageHeader
-        eyebrow="数据源"
-        title="海外内容采集中心"
-        description="把 X、TikTok、Reddit、YouTube 等内容源统一管理，进入同一个线索评分和素材处理流程。"
-        actions={
-          <Button onClick={() => !isPlaceholder && setConfigOpen(true)} disabled={isPlaceholder}>
-            数据源配置
-          </Button>
-        }
-      />
+      <div className="flex w-full max-w-xl items-center justify-between gap-4 rounded-lg border bg-card px-4 py-3 shadow-sm">
+        <div className="min-w-0">
+          <p className="text-xs font-semibold tracking-wide text-primary">数据源</p>
+          <h1 className="mt-1 text-lg font-bold tracking-tight text-foreground">海外内容采集中心</h1>
+        </div>
+        <Button onClick={() => !isPlaceholder && setConfigOpen(true)} disabled={isPlaceholder} className="shrink-0">
+          数据源配置
+        </Button>
+      </div>
       {(apiError || loading) && (
         <div className="flex items-center gap-2 rounded-lg border bg-muted/30 px-3.5 py-2.5 text-sm text-muted-foreground">
           {loading ? <Loader2 className="size-4 animate-spin" /> : <AlertCircle className="size-4 text-warning-foreground" />}
@@ -279,6 +300,19 @@ export function SourcesPage({ selectedSource, setSelectedSource }) {
                       </Button>
                     </div>
                   ))}
+                </div>
+              )}
+              {currentRemote && !isPlaceholder && runTotal > runPageSize && (
+                <div className="flex items-center justify-between gap-3 text-sm text-muted-foreground">
+                  <span className="tnum">第 {runPage + 1} / {pageCount} 页，共 {runTotal} 条</span>
+                  <div className="flex items-center gap-2">
+                    <Button variant="outline" size="sm" onClick={() => setRunPage((p) => Math.max(0, p - 1))} disabled={runPage === 0}>
+                      上一页
+                    </Button>
+                    <Button variant="outline" size="sm" onClick={() => setRunPage((p) => Math.min(pageCount - 1, p + 1))} disabled={runPage >= pageCount - 1}>
+                      下一页
+                    </Button>
+                  </div>
                 </div>
               )}
             </div>
@@ -392,16 +426,17 @@ function AccountsDialog({ open, onClose, source }) {
   useEffect(() => {
     if (!open || !source?.id) return;
     setLoading(true);
-    api.get(`/api/source-posts?source_id=${encodeURIComponent(source.id)}&limit=200`)
+    api.get(`/api/source-accounts?source_id=${encodeURIComponent(source.id)}`)
       .then((p) => {
         const byHandle = {};
-        for (const post of p.posts || []) {
-          const h = (post.author_handle || "").toLowerCase();
+        for (const account of p.accounts || []) {
+          const h = (account.handle || "").toLowerCase();
           if (h && !byHandle[h]) {
             byHandle[h] = {
-              handle: post.author_handle,
-              name: post.author_name,
-              avatar: post.author_avatar_url,
+              handle: account.handle,
+              name: account.author_name,
+              avatar: account.avatar_url,
+              lastPostAt: account.last_post_at,
             };
           }
         }
@@ -434,6 +469,11 @@ function AccountsDialog({ open, onClose, source }) {
                 <div className="min-w-0">
                   <p className="truncate text-sm font-semibold text-foreground">{prof.name || String(handle).replace(/^@/, "")}</p>
                   <p className="truncate text-xs text-muted-foreground">@{String(handle).replace(/^@/, "")}</p>
+                  {prof.lastPostAt && (
+                    <p className="truncate text-xs text-muted-foreground">
+                      最近采集 {new Date(prof.lastPostAt).toLocaleString("zh-CN")}
+                    </p>
+                  )}
                 </div>
               </div>
             );

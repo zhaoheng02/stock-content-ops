@@ -46,6 +46,7 @@ class DataSourceRun:
     output_path: str
     message: str = ""
     airtap_task_id: str = ""
+    kind: str = "collect"
 
 
 class CredentialFile:
@@ -143,6 +144,37 @@ class JsonDataSourceRepository:
                 existing[chash] = {**record, "first_seen_at": first_seen}
         self._write_json(self.posts_path, {"posts": list(existing.values())})
         return new_count
+
+    @property
+    def accounts_path(self) -> Path:
+        return self.runs_path.parent / "monitored_accounts.json"
+
+    def list_monitored_accounts(self, source_id: str) -> List[dict]:
+        rows = self._read_json(self.accounts_path, {"accounts": []}).get("accounts", [])
+        return [r for r in rows if r.get("source_id") == source_id]
+
+    def upsert_monitored_accounts(self, rows: List[dict]) -> None:
+        existing = self._read_json(self.accounts_path, {"accounts": []}).get("accounts", [])
+        index = {(r.get("source_id"), r.get("handle")): r for r in existing}
+        for row in rows:
+            normalized = _normalize_account_row(row)
+            key = (normalized.get("source_id"), normalized.get("handle"))
+            index[key] = {**index.get(key, {}), **normalized}
+        self._write_json(self.accounts_path, {"accounts": list(index.values())})
+
+    def patch_monitored_account(self, source_id: str, handle: str, changes: dict) -> None:
+        rows = self._read_json(self.accounts_path, {"accounts": []}).get("accounts", [])
+        normalized_handle = _normalize_target(handle).lower()
+        for row in rows:
+            if row.get("source_id") == source_id and row.get("handle") == normalized_handle:
+                row.update(changes)
+        self._write_json(self.accounts_path, {"accounts": rows})
+
+    def delete_monitored_accounts(self, source_id: str, handles: List[str]) -> None:
+        rows = self._read_json(self.accounts_path, {"accounts": []}).get("accounts", [])
+        hset = {_normalize_target(handle).lower() for handle in handles}
+        rows = [r for r in rows if not (r.get("source_id") == source_id and r.get("handle") in hset)]
+        self._write_json(self.accounts_path, {"accounts": rows})
 
     def _read_json(self, path: Path, default: dict) -> dict:
         if not path.exists():
@@ -319,6 +351,33 @@ class SupabaseDataSourceRepository:
         )
         return len(payload)
 
+    def list_monitored_accounts(self, source_id: str) -> List[dict]:
+        return self.transport.request_json(
+            "GET", "monitored_accounts",
+            query=f"source_id=eq.{_quote_value(source_id)}&select=*&order=handle.asc",
+        )
+
+    def upsert_monitored_accounts(self, rows: List[dict]) -> None:
+        if not rows:
+            return
+        self.transport.request_json(
+            "POST", "monitored_accounts", payload=[_normalize_account_row(row) for row in rows],
+            query="on_conflict=source_id,handle",
+        )
+
+    def patch_monitored_account(self, source_id: str, handle: str, changes: dict) -> None:
+        self.transport.request_json(
+            "PATCH", "monitored_accounts", payload=changes,
+            query=f"source_id=eq.{_quote_value(source_id)}&handle=eq.{_quote_value(_normalize_target(handle).lower())}",
+        )
+
+    def delete_monitored_accounts(self, source_id: str, handles: List[str]) -> None:
+        for handle in handles:
+            self.transport.request_json(
+                "DELETE", "monitored_accounts",
+                query=f"source_id=eq.{_quote_value(source_id)}&handle=eq.{_quote_value(_normalize_target(handle).lower())}",
+            )
+
 
 class DataSourceService:
     def __init__(
@@ -347,7 +406,47 @@ class DataSourceService:
 
     def save_source(self, source: DataSourceConfig) -> DataSourceConfig:
         normalized = _normalize_source(source)
-        return self.repository.save_source(normalized)
+        try:
+            previous = self.repository.get_source(normalized.id)
+            previous_targets = {t.lower() for t in previous.targets}
+        except KeyError:
+            previous_targets = set()
+        saved = self.repository.save_source(normalized)
+        # Reconcile monitored_accounts with the new target list.
+        if hasattr(self.repository, "upsert_monitored_accounts"):
+            current = {t.lower(): t for t in saved.targets}
+            removed = [t for t in previous_targets if t not in current]
+            if removed and hasattr(self.repository, "delete_monitored_accounts"):
+                self.repository.delete_monitored_accounts(saved.id, removed)
+            new_handles = [low for low in current if low not in previous_targets]
+            # Seed rows for new handles so the popover shows them immediately.
+            if new_handles:
+                self.repository.upsert_monitored_accounts([
+                    {"source_id": saved.id, "handle": h} for h in new_handles
+                ])
+                # One-time profile/avatar fetch for the new handles, async so the
+                # save request returns immediately (Airtap takes minutes).
+                try:
+                    self.start_onboarding(saved.id, new_handles)
+                except Exception:
+                    pass  # profiles are best-effort; collection still works
+        return saved
+
+    def start_onboarding(self, source_id: str, handles: List[str]) -> DataSourceRun:
+        """Async one-time profile fetch run (kind=profile) for new handles."""
+        from .airtap_client import build_x_profile_prompt, create_task
+        handles = [_normalize_target(h).lower() for h in handles if _normalize_target(h)]
+        started_at = self.now()
+        run_id = f"{source_id}-profile-{_compact_timestamp(started_at)}"
+        task_id = create_task(build_x_profile_prompt(handles))
+        run = DataSourceRun(
+            id=run_id, source_id=source_id,
+            started_at=_format_datetime(started_at), finished_at=_format_datetime(started_at),
+            status="pending", items_collected=0, output_path="",
+            message="获取账号头像中…", airtap_task_id=task_id, kind="profile",
+        )
+        self.repository.append_run(run)
+        return run
 
     def run_source(
         self,
@@ -383,9 +482,18 @@ class DataSourceService:
                 from .airtap_client import build_x_collection_prompt, collect_via_airtap
                 from .x_ingest import normalize_airtap_payload
 
-                prompt = build_x_collection_prompt(source.targets, posts_per_account=3)
+                prompt = build_x_collection_prompt(
+                    source.targets,
+                    posts_per_account=3,
+                    since_by_handle=self._watermarks(source_id),
+                )
                 payload = collect_via_airtap(prompt)
-                records = normalize_airtap_payload(payload, source_id=source_id, run_id=run_id)
+                records = normalize_airtap_payload(
+                    payload,
+                    source_id=source_id,
+                    run_id=run_id,
+                    profiles_by_handle=self._profiles_by_handle(source_id),
+                )
                 posts = _posts_from_records(records)
             items_collected = len(posts)
             try:
@@ -400,6 +508,7 @@ class DataSourceService:
                     record["source_id"] = source_id
                     record["run_id"] = run_id
                 new_items = self.repository.upsert_posts(records)
+            self._advance_watermarks(source_id, records)
         except Exception as error:
             status = "failed"
             message = str(error)
@@ -424,7 +533,10 @@ class DataSourceService:
 
     def start_run(self, source_id: str) -> DataSourceRun:
         """Kick off an async Airtap collection: create the task, record a pending
-        run with the task id, and return immediately. reconcile_run finishes it."""
+        run with the task id, and return immediately. reconcile_run finishes it.
+
+        Per-account: cold start (no watermark) collects 3 latest original posts;
+        otherwise collects originals newer than the account's last_post_at."""
         from .airtap_client import build_x_collection_prompt, create_task
 
         source = self.repository.get_source(source_id)
@@ -432,7 +544,8 @@ class DataSourceService:
             raise RuntimeError(f"unsupported data source platform: {source.platform}")
         started_at = self.now()
         run_id = f"{source_id}-{_compact_timestamp(started_at)}"
-        prompt = build_x_collection_prompt(source.targets, posts_per_account=3)
+        since_by_handle = self._watermarks(source_id)
+        prompt = build_x_collection_prompt(source.targets, posts_per_account=3, since_by_handle=since_by_handle)
         try:
             task_id = create_task(prompt)
         except Exception as error:
@@ -447,43 +560,95 @@ class DataSourceService:
             id=run_id, source_id=source_id,
             started_at=_format_datetime(started_at), finished_at=_format_datetime(started_at),
             status="pending", items_collected=0, output_path="",
-            message="采集中…", airtap_task_id=task_id,
+            message="采集中…", airtap_task_id=task_id, kind="collect",
         )
         self.repository.append_run(run)
         return run
 
+    def _watermarks(self, source_id: str) -> dict:
+        """Map handle -> last collected post ISO time (absolute), for incremental."""
+        if not hasattr(self.repository, "list_monitored_accounts"):
+            return {}
+        out = {}
+        for acct in self.repository.list_monitored_accounts(source_id):
+            last = acct.get("last_post_at")
+            if last:
+                out[str(acct.get("handle", "")).lower()] = last
+        return out
+
+    def _profiles_by_handle(self, source_id: str) -> dict:
+        if not hasattr(self.repository, "list_monitored_accounts"):
+            return {}
+        out = {}
+        for acct in self.repository.list_monitored_accounts(source_id):
+            out[str(acct.get("handle", "")).lower()] = acct
+        return out
+
     def reconcile_run(self, run: DataSourceRun) -> DataSourceRun:
         """Check one pending run's Airtap task; if done, ingest and update it."""
-        from .airtap_client import poll_until_done, latest_agent_text, AirtapError
-        from .x_ingest import extract_airtap_json, normalize_airtap_payload
+        from .airtap_client import poll_until_done, latest_agent_text
+        from .x_ingest import extract_airtap_json, normalize_airtap_payload, extract_profiles
 
         if not run.airtap_task_id:
             return run
-        # Single non-blocking-ish poll: short max_wait so cron/refresh stays fast.
         details = poll_until_done(run.airtap_task_id, interval_secs=4.0, max_wait_secs=20.0)
         state = details.get("_finalState")
         if state in (None, "TIMEOUT") or state not in ("COMPLETED", "FAILED", "CANCELLED"):
             return run  # still running; leave pending
         changes = {"finished_at": _format_datetime(self.now())}
-        if state == "COMPLETED":
-            text = latest_agent_text(details)
-            payload = extract_airtap_json(text)
-            if payload is None:
-                changes.update(status="failed", message="采集完成但未返回可解析结果")
-            else:
-                records = normalize_airtap_payload(payload, source_id=run.source_id, run_id=run.id)
-                new_items = 0
-                if records and hasattr(self.repository, "upsert_posts"):
-                    new_items = self.repository.upsert_posts(records)
-                changes.update(
-                    status="success",
-                    items_collected=len(records),
-                    message=f"new={new_items}",
-                )
-        else:
+        if state != "COMPLETED":
             changes.update(status="failed", message=f"Airtap 任务{state}")
+            self.repository.patch_run(run.id, changes)
+            return run
+
+        text = latest_agent_text(details)
+        payload = extract_airtap_json(text)
+        if payload is None:
+            changes.update(status="failed", message="采集完成但未返回可解析结果")
+            self.repository.patch_run(run.id, changes)
+            return run
+
+        if run.kind == "profile":
+            profiles = extract_profiles(payload)
+            if hasattr(self.repository, "upsert_monitored_accounts"):
+                rows = [{
+                    "source_id": run.source_id, "handle": p["handle"],
+                    "author_name": p.get("author_name"), "avatar_url": p.get("avatar_url"),
+                    "bio": p.get("bio"), "profile_url": p.get("profile_url"),
+                    "onboarded_at": _format_datetime(self.now()),
+                } for p in profiles]
+                self.repository.upsert_monitored_accounts(rows)
+            changes.update(status="success", items_collected=len(profiles), message=f"profiles={len(profiles)}")
+            self.repository.patch_run(run.id, changes)
+            return run
+
+        records = normalize_airtap_payload(
+            payload, source_id=run.source_id, run_id=run.id,
+            profiles_by_handle=self._profiles_by_handle(run.source_id),
+        )
+        new_items = 0
+        if records and hasattr(self.repository, "upsert_posts"):
+            new_items = self.repository.upsert_posts(records)
+        self._advance_watermarks(run.source_id, records)
+        changes.update(status="success", items_collected=len(records), message=f"new={new_items}")
         self.repository.patch_run(run.id, changes)
         return run
+
+    def _advance_watermarks(self, source_id: str, records: List[dict]) -> None:
+        """Update each account's last_post_at to the newest published_at seen."""
+        if not records or not hasattr(self.repository, "patch_monitored_account"):
+            return
+        newest = {}
+        for r in records:
+            handle = str(r.get("author_handle", "")).lower()
+            pub = r.get("published_at")
+            if handle and pub and (handle not in newest or pub > newest[handle]):
+                newest[handle] = pub
+        for handle, pub in newest.items():
+            try:
+                self.repository.patch_monitored_account(source_id, handle, {"last_post_at": pub})
+            except Exception:
+                pass
 
     def reconcile_pending(self, limit: int = 5) -> List[dict]:
         results = []
@@ -505,7 +670,7 @@ class DataSourceService:
         for source in self.repository.list_sources():
             if not source.enabled or source.platform != "x":
                 continue
-            runs = self.repository.list_runs(source_id=source.id, limit=1)
+            runs = [r for r in self.repository.list_runs(source_id=source.id, limit=10) if r.kind == "collect"]
             if not runs:
                 due.append(source)
                 continue
@@ -632,6 +797,13 @@ def _normalize_target(raw: str) -> str:
     return target.lstrip("@").strip()
 
 
+def _normalize_account_row(row: dict) -> dict:
+    normalized = dict(row)
+    handle = _normalize_target(str(normalized.get("handle", ""))).lower()
+    normalized["handle"] = handle
+    return normalized
+
+
 def _parse_env_assignment(line: str) -> Optional[Tuple[str, str]]:
     stripped = line.strip()
     if not stripped or stripped.startswith("#"):
@@ -693,6 +865,7 @@ def _run_from_dict(payload: dict) -> DataSourceRun:
         output_path=str(payload.get("output_path", "")),
         message=str(payload.get("message", "")),
         airtap_task_id=str(payload.get("airtap_task_id", "")),
+        kind=str(payload.get("kind", "collect")),
     )
 
 
